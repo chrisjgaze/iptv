@@ -27,6 +27,7 @@ function App() {
   const [expandedSections, setExpandedSections] = useState({});
   const [expandedSubGroups, setExpandedSubGroups] = useState({});
   const [expandedSeries, setExpandedSeries] = useState({});
+  const [expandedSeasons, setExpandedSeasons] = useState({});
 
   // --- Helpers ---
   const toggleGroup = (prefix) => {
@@ -43,6 +44,10 @@ function App() {
 
   const toggleSeries = (id) => {
       setExpandedSeries(prev => ({...prev, [id]: !prev[id]}));
+  };
+
+  const toggleSeason = (id) => {
+      setExpandedSeasons(prev => ({...prev, [id]: !prev[id]}));
   };
 
 
@@ -310,6 +315,7 @@ function App() {
       setExpandedSections(newExpanded);
       setExpandedSubGroups({}); // Reset sub-groups
       setExpandedSeries({});    // Reset series groups
+      setExpandedSeasons({});   // Reset season groups
   }, [streamSections]);
 
   // Auto-select first category if current selection disappears due to filter
@@ -490,7 +496,7 @@ function App() {
 
                 // Helper to group by Series (Sxx Exx) and then render
                 const renderWithSeriesGrouping = (list, keyPrefix, shouldStrip) => {
-                    const seriesGroups = {};
+                    const seriesGroups = {}; // { SeriesName: { SeasonNum: [streams] } }
                     const looseStreams = [];
 
                     list.forEach(stream => {
@@ -509,8 +515,10 @@ function App() {
 
                         if (match) {
                             const seriesName = match[1].trim();
-                            if (!seriesGroups[seriesName]) seriesGroups[seriesName] = [];
-                            seriesGroups[seriesName].push(streamWithDisplay);
+                            const seasonNum = match[2];
+                            if (!seriesGroups[seriesName]) seriesGroups[seriesName] = {};
+                            if (!seriesGroups[seriesName][seasonNum]) seriesGroups[seriesName][seasonNum] = [];
+                            seriesGroups[seriesName][seasonNum].push(streamWithDisplay);
                         } else {
                             looseStreams.push(streamWithDisplay);
                         }
@@ -521,13 +529,28 @@ function App() {
                             {renderCards(looseStreams, `${keyPrefix}-loose`)}
                             {Object.keys(seriesGroups).sort().map(seriesName => {
                                 const seriesKey = `${keyPrefix}-series-${seriesName}`;
+                                const seasons = seriesGroups[seriesName];
+                                const totalEpisodes = Object.values(seasons).reduce((acc, arr) => acc + arr.length, 0);
+
                                 return (
                                     <React.Fragment key={seriesKey}>
                                         <div className="series-header" onClick={() => toggleSeries(seriesKey)}>
                                             {expandedSeries[seriesKey] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                            {seriesName} ({seriesGroups[seriesName].length})
+                                            {seriesName} ({totalEpisodes})
                                         </div>
-                                        {expandedSeries[seriesKey] && renderCards(seriesGroups[seriesName], seriesKey)}
+                                        {expandedSeries[seriesKey] && Object.keys(seasons).sort().map(seasonNum => {
+                                            const seasonKey = `${seriesKey}-S${seasonNum}`;
+                                            const seasonLabel = `Season ${seasonNum}`;
+                                            return (
+                                                <React.Fragment key={seasonKey}>
+                                                     <div className="season-header" onClick={() => toggleSeason(seasonKey)}>
+                                                        {expandedSeasons[seasonKey] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                                        {seasonLabel} ({seasons[seasonNum].length})
+                                                     </div>
+                                                     {expandedSeasons[seasonKey] && renderCards(seasons[seasonNum], seasonKey)}
+                                                </React.Fragment>
+                                            )
+                                        })}
                                     </React.Fragment>
                                 );
                             })}
