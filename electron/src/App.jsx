@@ -26,6 +26,7 @@ function App() {
   const [expandedGroups, setExpandedGroups] = useState({});
   const [expandedSections, setExpandedSections] = useState({});
   const [expandedSubGroups, setExpandedSubGroups] = useState({});
+  const [expandedSeries, setExpandedSeries] = useState({});
 
   // --- Helpers ---
   const toggleGroup = (prefix) => {
@@ -38,6 +39,10 @@ function App() {
 
   const toggleSubGroup = (id) => {
       setExpandedSubGroups(prev => ({...prev, [id]: !prev[id]}));
+  };
+
+  const toggleSeries = (id) => {
+      setExpandedSeries(prev => ({...prev, [id]: !prev[id]}));
   };
 
 
@@ -304,6 +309,7 @@ function App() {
       streamSections.forEach(s => newExpanded[s.name] = true);
       setExpandedSections(newExpanded);
       setExpandedSubGroups({}); // Reset sub-groups
+      setExpandedSeries({});    // Reset series groups
   }, [streamSections]);
 
   // Auto-select first category if current selection disappears due to filter
@@ -465,30 +471,69 @@ function App() {
                 // Determine if we should show the header
                 const showHeader = streamSections.length > 1 || section.name !== 'General';
                 
-                // Helper to render streams
-                const renderStreams = (list, keyPrefix, shouldStrip = false) => list.map((stream, idx) => {
-                    let displayName = stream.name;
-                    if (shouldStrip && displayName.includes('|')) {
-                        const parts = displayName.split('|');
-                        displayName = parts.slice(1).join('|').trim();
-                    }
-                    
+                // Helper to render final stream cards
+                const renderCards = (list, keyPrefix) => list.map((stream, idx) => (
+                    <div 
+                        key={`${keyPrefix}-${idx}`} 
+                        className="stream-card"
+                        onDoubleClick={() => playStream(stream)}
+                        title={stream.name}
+                    >
+                        <CachedImage 
+                            src={stream.tvg_logo} 
+                            alt={stream.name} 
+                            className="stream-logo"
+                        />
+                        <div className="stream-name">{stream.displayName || stream.name}</div>
+                    </div>
+                ));
+
+                // Helper to group by Series (Sxx Exx) and then render
+                const renderWithSeriesGrouping = (list, keyPrefix, shouldStrip) => {
+                    const seriesGroups = {};
+                    const looseStreams = [];
+
+                    list.forEach(stream => {
+                        let displayName = stream.name;
+                        if (shouldStrip && displayName.includes('|')) {
+                            const parts = displayName.split('|');
+                            displayName = parts.slice(1).join('|').trim();
+                        }
+                        
+                        // Check for Series Pattern:  "Name S01 E01" or "Name S01E01"
+                        // Capture group 1 is the name
+                        const match = displayName.match(/^(.*?)\s+S(\d+)\s*E(\d+)/i);
+                        
+                        // Attach the computed display name to the stream object temporarily for rendering
+                        const streamWithDisplay = { ...stream, displayName };
+
+                        if (match) {
+                            const seriesName = match[1].trim();
+                            if (!seriesGroups[seriesName]) seriesGroups[seriesName] = [];
+                            seriesGroups[seriesName].push(streamWithDisplay);
+                        } else {
+                            looseStreams.push(streamWithDisplay);
+                        }
+                    });
+
                     return (
-                        <div 
-                            key={`${keyPrefix}-${idx}`} 
-                            className="stream-card"
-                            onDoubleClick={() => playStream(stream)}
-                            title={stream.name}
-                        >
-                            <CachedImage 
-                                src={stream.tvg_logo} 
-                                alt={stream.name} 
-                                className="stream-logo"
-                            />
-                            <div className="stream-name">{displayName}</div>
-                        </div>
+                        <>
+                            {renderCards(looseStreams, `${keyPrefix}-loose`)}
+                            {Object.keys(seriesGroups).sort().map(seriesName => {
+                                const seriesKey = `${keyPrefix}-series-${seriesName}`;
+                                return (
+                                    <React.Fragment key={seriesKey}>
+                                        <div className="series-header" onClick={() => toggleSeries(seriesKey)}>
+                                            {expandedSeries[seriesKey] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                            {seriesName} ({seriesGroups[seriesName].length})
+                                        </div>
+                                        {expandedSeries[seriesKey] && renderCards(seriesGroups[seriesName], seriesKey)}
+                                    </React.Fragment>
+                                );
+                            })}
+                        </>
                     );
-                });
+                };
 
                 // Process subgroups
                 let content = null;
@@ -510,11 +555,12 @@ function App() {
                     // If only one group matches everything and no root streams, flatten it to avoid redundancy
                     const groupKeys = Object.keys(groups).sort();
                     if (groupKeys.length === 1 && rootStreams.length === 0) {
-                         content = renderStreams(groups[groupKeys[0]], `${secIdx}-flat`, true);
+                         // Flatten the single group, strip prefix = true
+                         content = renderWithSeriesGrouping(groups[groupKeys[0]], `${secIdx}-flat`, true);
                     } else {
                         content = (
                             <>
-                                {renderStreams(rootStreams, `${secIdx}-root`, false)}
+                                {renderWithSeriesGrouping(rootStreams, `${secIdx}-root`, false)}
                                 {groupKeys.map(groupName => {
                                     const subGroupId = `${secIdx}-${groupName}`;
                                     return (
@@ -523,7 +569,7 @@ function App() {
                                                 {expandedSubGroups[subGroupId] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                                 {groupName} ({groups[groupName].length})
                                             </div>
-                                            {expandedSubGroups[subGroupId] && renderStreams(groups[groupName], subGroupId, true)}
+                                            {expandedSubGroups[subGroupId] && renderWithSeriesGrouping(groups[groupName], subGroupId, true)}
                                         </React.Fragment>
                                     );
                                 })}

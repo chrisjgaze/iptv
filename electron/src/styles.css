@@ -143,6 +143,28 @@ body {
     background-color: #373a40;
 }
 
+.series-header {
+  grid-column: 1 / -1;
+  padding: 6px 10px;
+  background-color: #25262b;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  margin-left: 20px; /* More indentation */
+  border-radius: 4px;
+}
+
+.series-header:hover {
+    background-color: #2c2e33;
+    color: var(--text-primary);
+}
+
 .category-item {
   padding: 8px 12px;
   cursor: pointer;
