@@ -1,0 +1,565 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { Settings, RefreshCw, Play, Search, Copy, Download, Cast, ChevronRight, ChevronDown } from 'lucide-react';
+import { SERVER_URLS, parseM3U, getRewrittenUrl } from './utils/m3u';
+import VideoPlayer from './components/VideoPlayer';
+import CachedImage from './components/CachedImage';
+
+const USERNAME = "c91392c3e194";
+const PASSWORD = "7657840f7676";
+
+function App() {
+  const [selectedServer, setSelectedServer] = useState(SERVER_URLS[0]);
+  const [status, setStatus] = useState('Ready');
+  const [categories, setCategories] = useState([]);
+  const [streams, setStreams] = useState([]);
+  const [filteredStreams, setFilteredStreams] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [englishOnly, setEnglishOnly] = useState(false);
+  const [playerMode, setPlayerMode] = useState('vlc'); // 'vlc', 'internal', 'cast'
+  const [currentStream, setCurrentStream] = useState(null); // For internal player
+  
+  // Cast State
+  const [castDevices, setCastDevices] = useState(['None']);
+  const [selectedCastDevice, setSelectedCastDevice] = useState('None');
+  const [expandedGroups, setExpandedGroups] = useState({});
+  const [expandedSections, setExpandedSections] = useState({});
+  const [expandedSubGroups, setExpandedSubGroups] = useState({});
+
+  // --- Helpers ---
+  const toggleGroup = (prefix) => {
+      setExpandedGroups(prev => ({...prev, [prefix]: !prev[prefix]}));
+  };
+
+  const toggleSection = (name) => {
+      setExpandedSections(prev => ({...prev, [name]: !prev[name]}));
+  };
+
+  const toggleSubGroup = (id) => {
+      setExpandedSubGroups(prev => ({...prev, [id]: !prev[id]}));
+  };
+
+
+  const handleM3UData = (rawData) => {
+      setStatus('Parsing M3U...');
+      // Small delay to let UI render the parsing status before heavy sync operation
+      setTimeout(() => {
+          const data = parseM3U(rawData);
+          setCategories(data.categories);
+          setStreams(data.streams);
+          setStatus(`Loaded ${data.streams.length} streams in ${data.categories.length} categories.`);
+          
+          // Default to first category if available
+          if (data.categories.length > 0 && !selectedCategory) {
+             setSelectedCategory(data.categories[0]);
+          }
+      }, 100);
+  };
+
+  // --- Initial Load ---
+  useEffect(() => {
+      const loadLocal = async () => {
+          setStatus('Checking local cache...');
+          try {
+              const result = await window.api.loadLocalM3U();
+              if (result.success) {
+                  console.log("Local cache loaded");
+                  handleM3UData(result.data);
+              } else {
+                  setStatus('Ready (No local cache). Click Reload to fetch.');
+              }
+          } catch (e) {
+              console.error("Local load error", e);
+              setStatus('Ready.');
+          }
+      };
+      loadLocal();
+
+      // Scan for Cast Devices
+      if (window.api.castScan) {
+          window.api.castScan().then(devices => {
+              setCastDevices(['None', ...devices]);
+          });
+          
+          window.api.onCastDeviceFound(name => {
+              setCastDevices(prev => {
+                  if (!prev.includes(name)) return [...prev, name];
+                  return prev;
+              });
+          });
+      }
+  }, []); // Run once on mount
+
+  // Watch for 'None' selection to stop casting
+  useEffect(() => {
+      if (selectedCastDevice === 'None') {
+          // Find if there was a previous device and stop it
+          // We can just broadcast a stop to all if we don't track the last one, 
+          // but usually calling stop on the backend is enough.
+          // For simplicity, we stop the last known active device if we were to track it.
+          // Instead, let's just trigger a global stop in main.js if device is null.
+          window.api.castStop(null); 
+          setStatus('Casting stopped.');
+      }
+  }, [selectedCastDevice]);
+
+  // --- Actions ---
+
+  const fetchM3U = async () => {
+    setIsLoading(true);
+    setStatus('Connecting...');
+    
+    // Construct URL
+    const base = selectedServer.replace(/\/$/, "");
+    const url = `${base}/get.php?username=${USERNAME}&password=${PASSWORD}&type=m3u_plus&output=ts`;
+
+    // Setup progress listener
+    const handleProgress = (data) => {
+       if (data.connected) {
+         const speedMB = (data.speed / (1024 * 1024)).toFixed(2); // Speed in MB/s
+         const loadedMB = (data.loaded / (1024 * 1024)).toFixed(1);
+         setStatus(`Downloading... ${loadedMB} MB downloaded (${speedMB} MB/s)`);
+       }
+    };
+
+    if (window.api && window.api.onProgress) {
+        window.api.removeProgressListeners(); // Clean up old listeners
+        window.api.onProgress(handleProgress);
+    }
+
+    try {
+      // Use Electron IPC to fetch (bypass CORS)
+      const result = await window.api.fetchM3U(url);
+      
+      if (result.success) {
+        handleM3UData(result.data);
+      } else {
+        setStatus(`Error: ${result.error}`);
+        alert(`Failed to fetch M3U: ${result.error}`);
+      }
+    } catch (e) {
+      setStatus(`Error: ${e.message}`);
+    } finally {
+      setIsLoading(false);
+      if (window.api && window.api.removeProgressListeners) {
+          window.api.removeProgressListeners();
+      }
+    }
+  };
+
+  const playStream = async (stream) => {
+    if (!stream || !stream.url) return;
+    
+    // Rewrite URL to use selected server
+    const finalUrl = getRewrittenUrl(stream.url, selectedServer);
+    
+    if (playerMode === 'internal') {
+        setCurrentStream({ ...stream, url: finalUrl });
+    } else if (playerMode === 'cast') {
+        if (!selectedCastDevice) {
+            alert("No Chromecast selected. Please select a device.");
+            return;
+        }
+        setStatus(`Casting to ${selectedCastDevice}: ${stream.name}`);
+        const result = await window.api.castPlay(selectedCastDevice, finalUrl);
+        if (!result.success) {
+            alert(`Cast failed: ${result.error}`);
+        } else {
+            setStatus(`Playing on ${selectedCastDevice}: ${stream.name}`);
+        }
+    } else {
+        setStatus(`Launching VLC for: ${stream.name}`);
+        const result = await window.api.launchVLC(finalUrl);
+        if (!result.success) {
+          alert(`Failed to launch VLC: ${result.error}`);
+        }
+    }
+  };
+
+  // --- Filtering Logic ---
+
+  // 1. First, compute matching streams globally based on search query
+  const matchingStreams = useMemo(() => {
+    if (!searchQuery && !englishOnly) return streams;
+
+    const lowerQuery = searchQuery.toLowerCase();
+    
+    // English filter regex/logic
+    const forbidden = ["SWEDEN", "NORWAY", "DENMARK", "FINLAND", "DEUTSCH", "FRENCH", "ITALIAN", "SPANISH", "PORTUGUES", "TURKISH", "RUSSIAN", "ARABIC"];
+
+    return streams.filter(s => {
+        // Step 1: English Filter
+        if (englishOnly) {
+            // Rule 1: Category Name Pipe Logic
+            const catUpper = (s.group_title || "").toUpperCase();
+            if (catUpper.includes('|')) {
+                const allowedPipes = ['EN|', 'US|', 'UK|'];
+                if (!allowedPipes.some(p => catUpper.includes(p))) return false;
+            }
+
+            // Rule 2: Category Name Forbidden Starts
+            const forbiddenCatStarts = ["DENMARK", "FINLAND", "NORWAY", "SWEDEN"];
+            if (forbiddenCatStarts.some(prefix => catUpper.startsWith(prefix))) return false;
+
+            // Rule 3: Stream Name Forbidden Start Words
+            const nameUpper = s.name.toUpperCase();
+            if (forbidden.some(f => nameUpper.startsWith(f))) return false;
+        }
+
+        // Step 2: Search Query
+        if (!searchQuery) return true;
+        
+        // Match against Stream Name OR Category Name
+        const nameMatch = s.name.toLowerCase().includes(lowerQuery);
+        const catMatch = s.group_title.toLowerCase().includes(lowerQuery);
+        
+        return nameMatch || catMatch;
+    });
+  }, [streams, searchQuery, englishOnly]);
+
+  // 2. Compute visible categories based on matching streams
+  const visibleCategories = useMemo(() => {
+      // Get unique categories from matching streams
+      const cats = new Set(matchingStreams.map(s => s.group_title));
+      
+      // If we are searching, the order might be based on relevance, but usually keeping original sort is best.
+      // We filter the original 'categories' list to maintain order.
+      return categories.filter(c => cats.has(c));
+  }, [categories, matchingStreams]);
+
+  // Group categories by first word (prefix)
+  const groupedCategories = useMemo(() => {
+      const groups = {};
+      visibleCategories.forEach(cat => {
+          const prefix = cat.split(' ')[0] || "Other";
+          if (!groups[prefix]) groups[prefix] = [];
+          groups[prefix].push(cat);
+      });
+      return groups;
+  }, [visibleCategories]);
+
+  // Auto-expand group of selected category
+  useEffect(() => {
+      if (selectedCategory) {
+          const prefix = selectedCategory.split(' ')[0] || "Other";
+          setExpandedGroups(prev => ({...prev, [prefix]: true}));
+      }
+  }, [selectedCategory]);
+
+  // 3. Compute final list for the main view (matching streams in selected category)
+  useEffect(() => {
+    if (!selectedCategory) {
+      setFilteredStreams([]);
+      return;
+    }
+    
+    // If the selected category is no longer visible, we might want to switch?
+    // For now, just show what matches in this category.
+    const inCategory = matchingStreams.filter(s => s.group_title === selectedCategory);
+    setFilteredStreams(inCategory);
+
+  }, [selectedCategory, matchingStreams]);
+
+  // Group streams by marker (##### NAME #####)
+  const streamSections = useMemo(() => {
+    const sections = [];
+    let currentSection = { name: 'General', streams: [] };
+    let hasMarkers = false;
+    
+    filteredStreams.forEach(stream => {
+        const match = stream.name.match(/^#+\s*(.+?)\s*#+$/);
+        if (match) {
+            hasMarkers = true;
+            if (currentSection.streams.length > 0 || sections.length > 0) {
+                 // Only push previous if it has content or if we are switching sections
+                 // Actually, we should always push the previous section if we hit a marker, 
+                 // UNLESS it's the initial "General" and it's empty.
+                 if (currentSection.streams.length > 0 || currentSection.name !== 'General') {
+                    sections.push(currentSection);
+                 }
+            }
+            currentSection = { name: match[1], streams: [] };
+        } else {
+            currentSection.streams.push(stream);
+        }
+    });
+    
+    // Push the last section
+    if (currentSection.streams.length > 0 || (hasMarkers && currentSection.name !== 'General')) {
+        sections.push(currentSection);
+    }
+
+    // If no markers were found, just return the flat list as one section (which we might verify later)
+    if (!hasMarkers && sections.length === 0 && currentSection.streams.length > 0) {
+        return [currentSection];
+    }
+    
+    return sections;
+  }, [filteredStreams]);
+
+  // Auto-expand all sections when category changes
+  useEffect(() => {
+      const newExpanded = {};
+      streamSections.forEach(s => newExpanded[s.name] = true);
+      setExpandedSections(newExpanded);
+      setExpandedSubGroups({}); // Reset sub-groups
+  }, [streamSections]);
+
+  // Auto-select first category if current selection disappears due to filter
+  useEffect(() => {
+      if (visibleCategories.length > 0) {
+          if (!selectedCategory || !visibleCategories.includes(selectedCategory)) {
+              setSelectedCategory(visibleCategories[0]);
+          }
+      } else {
+          // No matches found globally
+          setSelectedCategory(null);
+      }
+  }, [visibleCategories, selectedCategory]);
+
+
+  // --- Render ---
+
+  return (
+    <div className="container">
+      {/* Header */}
+      <div className="header">
+        <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>IPTV Electron</div>
+        
+        <div className="controls">
+          <label>Server:</label>
+          <select 
+            value={selectedServer} 
+            onChange={(e) => setSelectedServer(e.target.value)}
+            style={{ width: '200px' }}
+          >
+            {SERVER_URLS.map(url => (
+              <option key={url} value={url}>{url}</option>
+            ))}
+          </select>
+          
+          <button 
+            className="btn btn-primary" 
+            onClick={fetchM3U} 
+            disabled={isLoading}
+            style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
+          >
+            <RefreshCw size={16} className={isLoading ? 'spin' : ''} />
+            {isLoading ? 'Loading...' : 'Reload'}
+          </button>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', marginLeft: '10px' }}>
+            <input 
+              type="checkbox" 
+              checked={englishOnly} 
+              onChange={(e) => setEnglishOnly(e.target.checked)} 
+            />
+            English Only
+          </label>
+        </div>
+
+        <div style={{ flex: 1 }}></div>
+
+        <div className="controls">
+            <div style={{ display: 'flex', gap: '10px', marginRight: '15px', alignItems: 'center', backgroundColor: '#25262b', padding: '4px', borderRadius: '4px', border: '1px solid #373a40' }}>
+                <span style={{ fontSize: '0.8rem', paddingLeft: '5px', color: '#888' }}>Player:</span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                    <input 
+                        type="radio" 
+                        name="player" 
+                        value="vlc" 
+                        checked={playerMode === 'vlc'} 
+                        onChange={() => setPlayerMode('vlc')} 
+                    />
+                    VLC
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                    <input 
+                        type="radio" 
+                        name="player" 
+                        value="internal" 
+                        checked={playerMode === 'internal'} 
+                        onChange={() => setPlayerMode('internal')} 
+                    />
+                    Internal
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                    <input 
+                        type="radio" 
+                        name="player" 
+                        value="cast" 
+                        checked={playerMode === 'cast'} 
+                        onChange={() => setPlayerMode('cast')} 
+                    />
+                    <Cast size={14}/> Cast
+                </label>
+            </div>
+
+            {playerMode === 'cast' && (
+                <select 
+                    value={selectedCastDevice}
+                    onChange={(e) => setSelectedCastDevice(e.target.value)}
+                    style={{ marginRight: '10px', width: '150px' }}
+                >
+                    {castDevices.length === 0 ? <option>Scanning...</option> : null}
+                    {castDevices.map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+            )}
+
+          <div style={{ position: 'relative' }}>
+             <Search size={16} style={{ position: 'absolute', left: 8, top: 8, color: '#888' }} />
+             <input 
+               type="text" 
+               placeholder="Search streams..." 
+               value={searchQuery}
+               onChange={(e) => setSearchQuery(e.target.value)}
+               style={{ paddingLeft: '30px', width: '250px' }}
+             />
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="main-content">
+        {/* Sidebar: Categories */}
+        <div className="sidebar">
+          <div className="sidebar-header">
+            Categories ({visibleCategories.length})
+          </div>
+          <div className="sidebar-list">
+            {Object.entries(groupedCategories).sort((a, b) => a[0].localeCompare(b[0])).map(([prefix, cats]) => (
+                <div key={prefix}>
+                    <div className="group-header" onClick={() => toggleGroup(prefix)}>
+                        {expandedGroups[prefix] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        {prefix}
+                        <span style={{ fontSize: '0.75rem', opacity: 0.6, marginLeft: 'auto' }}>{cats.length}</span>
+                    </div>
+                    {expandedGroups[prefix] && cats.map(cat => (
+                        <div 
+                            key={cat} 
+                            className={`category-item ${selectedCategory === cat ? 'active' : ''}`}
+                            onClick={() => setSelectedCategory(cat)}
+                            style={{ paddingLeft: '32px' }}
+                        >
+                            {cat}
+                        </div>
+                    ))}
+                </div>
+            ))}
+            {visibleCategories.length === 0 && (
+              <div style={{ padding: 10, color: '#666', fontStyle: 'italic' }}>
+                {searchQuery ? "No matches found." : "No categories loaded."}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Stream Grid */}
+        <div className="content-area">
+          <div className="sidebar-header" style={{ borderBottom: '1px solid #373a40' }}>
+            {selectedCategory || 'Select a Category'} ({filteredStreams.length})
+          </div>
+          <div className="stream-list">
+            {streamSections.map((section, secIdx) => {
+                // Determine if we should show the header
+                const showHeader = streamSections.length > 1 || section.name !== 'General';
+                
+                // Helper to render streams
+                const renderStreams = (list, keyPrefix) => list.map((stream, idx) => (
+                    <div 
+                        key={`${keyPrefix}-${idx}`} 
+                        className="stream-card"
+                        onDoubleClick={() => playStream(stream)}
+                        title={stream.name}
+                    >
+                        <CachedImage 
+                            src={stream.tvg_logo} 
+                            alt={stream.name} 
+                            className="stream-logo"
+                        />
+                        <div className="stream-name">{stream.name}</div>
+                    </div>
+                ));
+
+                // Process subgroups
+                let content = null;
+                if (!showHeader || expandedSections[section.name]) {
+                    const groups = {};
+                    const rootStreams = [];
+                    
+                    section.streams.forEach(s => {
+                        const parts = s.name.split('|');
+                        if (parts.length > 1) {
+                            const prefix = parts[0].trim();
+                            if (!groups[prefix]) groups[prefix] = [];
+                            groups[prefix].push(s);
+                        } else {
+                            rootStreams.push(s);
+                        }
+                    });
+
+                    // If only one group matches everything and no root streams, flatten it to avoid redundancy
+                    const groupKeys = Object.keys(groups).sort();
+                    if (groupKeys.length === 1 && rootStreams.length === 0) {
+                         content = renderStreams(groups[groupKeys[0]], `${secIdx}-flat`);
+                    } else {
+                        content = (
+                            <>
+                                {renderStreams(rootStreams, `${secIdx}-root`)}
+                                {groupKeys.map(groupName => {
+                                    const subGroupId = `${secIdx}-${groupName}`;
+                                    return (
+                                        <React.Fragment key={subGroupId}>
+                                            <div className="sub-group-header" onClick={() => toggleSubGroup(subGroupId)}>
+                                                {expandedSubGroups[subGroupId] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                                {groupName} ({groups[groupName].length})
+                                            </div>
+                                            {expandedSubGroups[subGroupId] && renderStreams(groups[groupName], subGroupId)}
+                                        </React.Fragment>
+                                    );
+                                })}
+                            </>
+                        );
+                    }
+                }
+
+                return (
+                    <React.Fragment key={secIdx}>
+                        {showHeader && (
+                            <div className="section-header" onClick={() => toggleSection(section.name)}>
+                                {expandedSections[section.name] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                {section.name} ({section.streams.length})
+                            </div>
+                        )}
+                        {content}
+                    </React.Fragment>
+                );
+            })}
+             {filteredStreams.length === 0 && selectedCategory && (
+              <div style={{ padding: 20, color: '#666', gridColumn: '1/-1', textAlign: 'center' }}>
+                No streams found in this category (check filters).
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Internal Player Overlay */}
+      {currentStream && (
+        <VideoPlayer 
+            url={currentStream.url} 
+            title={currentStream.name}
+            onClose={() => setCurrentStream(null)} 
+        />
+      )}
+
+      {/* Status Bar */}
+      <div className="status-bar">
+        {status}
+      </div>
+    </div>
+  );
+}
+
+export default App;

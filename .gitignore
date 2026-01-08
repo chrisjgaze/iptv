@@ -1,0 +1,20 @@
+# Node.js
+node_modules/
+dist/
+release/
+build/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Project Data
+output_data/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.gemini/
