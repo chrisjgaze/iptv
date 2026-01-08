@@ -466,21 +466,29 @@ function App() {
                 const showHeader = streamSections.length > 1 || section.name !== 'General';
                 
                 // Helper to render streams
-                const renderStreams = (list, keyPrefix) => list.map((stream, idx) => (
-                    <div 
-                        key={`${keyPrefix}-${idx}`} 
-                        className="stream-card"
-                        onDoubleClick={() => playStream(stream)}
-                        title={stream.name}
-                    >
-                        <CachedImage 
-                            src={stream.tvg_logo} 
-                            alt={stream.name} 
-                            className="stream-logo"
-                        />
-                        <div className="stream-name">{stream.name}</div>
-                    </div>
-                ));
+                const renderStreams = (list, keyPrefix, shouldStrip = false) => list.map((stream, idx) => {
+                    let displayName = stream.name;
+                    if (shouldStrip && displayName.includes('|')) {
+                        const parts = displayName.split('|');
+                        displayName = parts.slice(1).join('|').trim();
+                    }
+                    
+                    return (
+                        <div 
+                            key={`${keyPrefix}-${idx}`} 
+                            className="stream-card"
+                            onDoubleClick={() => playStream(stream)}
+                            title={stream.name}
+                        >
+                            <CachedImage 
+                                src={stream.tvg_logo} 
+                                alt={stream.name} 
+                                className="stream-logo"
+                            />
+                            <div className="stream-name">{displayName}</div>
+                        </div>
+                    );
+                });
 
                 // Process subgroups
                 let content = null;
@@ -502,11 +510,11 @@ function App() {
                     // If only one group matches everything and no root streams, flatten it to avoid redundancy
                     const groupKeys = Object.keys(groups).sort();
                     if (groupKeys.length === 1 && rootStreams.length === 0) {
-                         content = renderStreams(groups[groupKeys[0]], `${secIdx}-flat`);
+                         content = renderStreams(groups[groupKeys[0]], `${secIdx}-flat`, true);
                     } else {
                         content = (
                             <>
-                                {renderStreams(rootStreams, `${secIdx}-root`)}
+                                {renderStreams(rootStreams, `${secIdx}-root`, false)}
                                 {groupKeys.map(groupName => {
                                     const subGroupId = `${secIdx}-${groupName}`;
                                     return (
@@ -515,7 +523,7 @@ function App() {
                                                 {expandedSubGroups[subGroupId] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                                 {groupName} ({groups[groupName].length})
                                             </div>
-                                            {expandedSubGroups[subGroupId] && renderStreams(groups[groupName], subGroupId)}
+                                            {expandedSubGroups[subGroupId] && renderStreams(groups[groupName], subGroupId, true)}
                                         </React.Fragment>
                                     );
                                 })}
