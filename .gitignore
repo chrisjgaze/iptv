@@ -4,11 +4,6 @@ dist/
 release/
 build/
 
-# Python
-venv/
-__pycache__/
-*.pyc
-
 # Project Data
 output_data/
 
