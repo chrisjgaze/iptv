@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   cacheImage: (url) => ipcRenderer.invoke('cache-image', url),
   onCastDeviceFound: (callback) => ipcRenderer.on('cast-device-found', (event, name) => callback(name)),
   onProgress: (callback) => ipcRenderer.on('download-progress', (event, data) => callback(data)),
+  onDownloadLog: (callback) => ipcRenderer.on('download-log', (event, msg) => callback(msg)),
   removeProgressListeners: () => ipcRenderer.removeAllListeners('download-progress'),
   platform: process.platform
 });

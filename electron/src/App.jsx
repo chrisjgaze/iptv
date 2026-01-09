@@ -139,6 +139,13 @@ function App() {
 
       if (window.api.onDownloadProgressUpdate) window.api.onDownloadProgressUpdate(onProgress);
       if (window.api.onDownloadComplete) window.api.onDownloadComplete(onComplete);
+      
+      // Listen for debug logs from main process
+      if (window.api.onDownloadLog) {
+          window.api.onDownloadLog((msg) => {
+              console.log("%c[Main Process]", "color: cyan", msg);
+          });
+      }
 
       return () => {
           // Cleanup listeners if api exposes removal (assuming it does or overwrites)

@@ -459,16 +459,40 @@ if (!fs.existsSync(DOWNLOAD_DIR)) {
 ipcMain.handle('start-download', async (event, { url, filename, id }) => {
     try {
         console.log(`Starting download: ${filename} from ${url}`);
+        
+        // --- LOGGING HELPER ---
+        const log = (msg) => {
+            console.log(`[DL ${id}] ${msg}`);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('download-log', `[${filename}] ${msg}`);
+            }
+        };
+
+        log(`Requesting URL: ${url}`);
+
+        // Check for HLS
+        if (url.includes('.m3u8')) {
+            log("WARNING: This appears to be an HLS stream (m3u8). Direct download may only fetch the playlist file, not the video.");
+        }
+
         const controller = new AbortController();
-        const filePath = path.join(DOWNLOAD_DIR, `${filename.replace(/[^a-z0-9]/gi, '_')}.mp4`); // Simple sanitization
+        const filePath = path.join(DOWNLOAD_DIR, `${filename.replace(/[^a-z0-9]/gi, '_')}.mp4`);
         
         downloadSessions.set(id, controller);
+
+        // Standard browser-like headers
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': url,
+            'Accept': '*/*'
+        };
 
         const response = await axios({
             method: 'get',
             url: url,
             responseType: 'stream',
             signal: controller.signal,
+            headers: headers,
             onDownloadProgress: (progressEvent) => {
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('download-progress-update', {
@@ -476,18 +500,27 @@ ipcMain.handle('start-download', async (event, { url, filename, id }) => {
                         loaded: progressEvent.loaded,
                         total: progressEvent.total,
                         progress: progressEvent.progress,
-                        rate: progressEvent.rate, // bytes per second
+                        rate: progressEvent.rate,
                         status: 'downloading'
                     });
                 }
             }
         });
 
+        log(`Response Status: ${response.status}`);
+        log(`Content-Type: ${response.headers['content-type']}`);
+        log(`Content-Length: ${response.headers['content-length']}`);
+
+        if (response.status !== 200) {
+            throw new Error(`Server returned status ${response.status}`);
+        }
+
         const writer = fs.createWriteStream(filePath);
         response.data.pipe(writer);
 
         return new Promise((resolve, reject) => {
             writer.on('finish', () => {
+                log("Download finished successfully.");
                 downloadSessions.delete(id);
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('download-complete', { id, filePath });
@@ -495,26 +528,31 @@ ipcMain.handle('start-download', async (event, { url, filename, id }) => {
                 resolve({ success: true, filePath });
             });
             writer.on('error', (err) => {
+                log(`File Write Error: ${err.message}`);
                 downloadSessions.delete(id);
                 reject({ success: false, error: err.message });
             });
-            // Handle manual aborts via axios signal cleaning up the file
             response.data.on('close', () => {
                  if (controller.signal.aborted) {
+                     log("Download aborted by user.");
                      writer.destroy();
-                     fs.unlink(filePath, () => {}); // Delete partial file
+                     fs.unlink(filePath, () => {}); 
                  }
             });
         });
 
     } catch (error) {
         downloadSessions.delete(id);
+        const errMsg = error.message;
+        console.error(`Download failed [${id}]:`, errMsg);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+             mainWindow.webContents.send('download-log', `[${filename}] ERROR: ${errMsg}`);
+        }
+
         if (axios.isCancel(error)) {
-            console.log('Download canceled');
             return { success: false, status: 'canceled' };
         }
-        console.error('Download error:', error.message);
-        return { success: false, error: error.message };
+        return { success: false, error: errMsg };
     }
 });
 
