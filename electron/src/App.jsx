@@ -28,6 +28,7 @@ function App() {
   const [expandedSubGroups, setExpandedSubGroups] = useState({});
   const [expandedSeries, setExpandedSeries] = useState({});
   const [expandedSeasons, setExpandedSeasons] = useState({});
+  const [tileSize, setTileSize] = useState(200);
 
   // --- Helpers ---
   const toggleGroup = (prefix) => {
@@ -418,6 +419,19 @@ function App() {
                 </select>
             )}
 
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginRight: '15px' }}>
+                <span style={{ fontSize: '0.8rem', color: '#888', whiteSpace: 'nowrap' }}>Size:</span>
+                <input 
+                    type="range" 
+                    min="100" 
+                    max="400" 
+                    step="10"
+                    value={tileSize} 
+                    onChange={(e) => setTileSize(Number(e.target.value))}
+                    style={{ width: '80px', padding: 0 }}
+                />
+            </div>
+
           <div style={{ position: 'relative' }}>
              <Search size={16} style={{ position: 'absolute', left: 8, top: 8, color: '#888' }} />
              <input 
@@ -471,7 +485,7 @@ function App() {
           <div className="sidebar-header" style={{ borderBottom: '1px solid #373a40' }}>
             {selectedCategory || 'Select a Category'} ({filteredStreams.length})
           </div>
-          <div className="stream-list">
+          <div className="stream-list" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${tileSize}px, 1fr))` }}>
             {streamSections.map((section, secIdx) => {
                 // Determine if we should show the header
                 const showHeader = streamSections.length > 1 || section.name !== 'General';
