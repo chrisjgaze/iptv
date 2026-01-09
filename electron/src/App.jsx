@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Settings, RefreshCw, Play, Search, Copy, Download, Cast, ChevronRight, ChevronDown, X } from 'lucide-react';
+import { Settings, RefreshCw, Play, Search, Copy, Download, Cast, ChevronRight, ChevronDown, X, User } from 'lucide-react';
 import { parseM3U, getRewrittenUrl } from './utils/m3u';
 import VideoPlayer from './components/VideoPlayer';
 import CachedImage from './components/CachedImage';
@@ -7,6 +7,7 @@ import ProfileManager from './components/ProfileManager';
 
 function App() {
   const [currentProfile, setCurrentProfile] = useState(null);
+  const [selectedServer, setSelectedServer] = useState('');
   const [showProfiles, setShowProfiles] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [categories, setCategories] = useState([]);
@@ -71,9 +72,9 @@ function App() {
 
   // --- Download Logic ---
   const startDownload = (stream) => {
-      if (!currentProfile) return;
+      if (!currentProfile || !selectedServer) return;
       const id = Date.now().toString() + Math.random().toString().slice(2, 6);
-      const url = getRewrittenUrl(stream.url, currentProfile.server);
+      const url = getRewrittenUrl(stream.url, selectedServer);
       const filename = stream.name || "download";
 
       setActiveDownloads(prev => ({
@@ -161,6 +162,9 @@ function App() {
                   const active = config.profiles.find(p => p.id === config.activeProfileId);
                   if (active) {
                       setCurrentProfile(active);
+                      if (active.servers && active.servers.length > 0) {
+                          setSelectedServer(active.servers[0]);
+                      }
                   }
               } else {
                   setShowProfiles(true); // Open manager if no profiles
@@ -201,6 +205,15 @@ function App() {
       init();
   }, []); 
 
+  // Update selected server if profile changes or is edited
+  useEffect(() => {
+      if (currentProfile && currentProfile.servers) {
+          if (!currentProfile.servers.includes(selectedServer)) {
+              setSelectedServer(currentProfile.servers[0] || '');
+          }
+      }
+  }, [currentProfile, selectedServer]);
+
 
   // Watch for 'None' selection to stop casting
   useEffect(() => {
@@ -218,8 +231,8 @@ function App() {
   // --- Actions ---
 
   const fetchM3U = async () => {
-    if (!currentProfile || !currentProfile.username || !currentProfile.password || !currentProfile.server) {
-        alert("Please configure your profile first (Profiles button).");
+    if (!currentProfile || !currentProfile.username || !currentProfile.password || !selectedServer) {
+        alert("Please configure your profile and select a server.");
         setShowProfiles(true);
         return;
     }
@@ -228,7 +241,7 @@ function App() {
     setStatus('Connecting...');
     
     // Construct URL
-    const base = currentProfile.server.replace(/\/$/, "");
+    const base = selectedServer.replace(/\/$/, "");
     const url = `${base}/get.php?username=${currentProfile.username}&password=${currentProfile.password}&type=m3u_plus&output=ts`;
 
     // Setup progress listener
@@ -266,10 +279,10 @@ function App() {
   };
 
   const playStream = async (stream) => {
-    if (!stream || !stream.url || !currentProfile) return;
+    if (!stream || !stream.url || !currentProfile || !selectedServer) return;
     
     // Rewrite URL to use selected server
-    const finalUrl = getRewrittenUrl(stream.url, currentProfile.server);
+    const finalUrl = getRewrittenUrl(stream.url, selectedServer);
     
     if (playerMode === 'internal') {
         setCurrentStream({ ...stream, url: finalUrl });
@@ -457,6 +470,18 @@ function App() {
           >
             <Settings size={16} /> Profiles
           </button>
+
+          {currentProfile && currentProfile.servers && (
+              <select 
+                value={selectedServer} 
+                onChange={(e) => setSelectedServer(e.target.value)}
+                style={{ width: '180px' }}
+              >
+                {currentProfile.servers.map(url => (
+                  <option key={url} value={url}>{url}</option>
+                ))}
+              </select>
+          )}
 
           <button 
             className="btn btn-primary" 

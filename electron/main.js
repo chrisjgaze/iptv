@@ -449,25 +449,100 @@ ipcMain.handle('cache-image', async (event, url) => {
 });
 
 // --- Config Manager ---
-const CONFIG_FILE = path.join(USER_DATA_PATH, 'config.json');
+const CONFIG_FILE = path.join(USER_DATA_PATH, 'config.ini');
+
+const stringifyINI = (config) => {
+    let output = "";
+    // Global settings
+    output += "[Settings]\n";
+    output += `activeProfileId=${config.activeProfileId || ""}\n\n`;
+
+    // Profiles
+    (config.profiles || []).forEach(p => {
+        output += `[Profile_${p.id}]\n`;
+        output += `id=${p.id}\n`;
+        output += `name=${p.name}\n`;
+        output += `username=${p.username}\n`;
+        output += `password=${p.password}\n`;
+        output += `servers=${(p.servers || []).join(',')}\n\n`;
+    });
+    return output;
+};
+
+const parseINI = (data) => {
+    const lines = data.split(/\r?\n/);
+    const config = { profiles: [], activeProfileId: null };
+    let currentSection = null;
+    let currentProfile = null;
+
+    lines.forEach(line => {
+        line = line.trim();
+        if (!line || line.startsWith(';')) return;
+
+        const sectionMatch = line.match(/^\[(.+)\]$/);
+        if (sectionMatch) {
+            currentSection = sectionMatch[1];
+            if (currentSection.startsWith('Profile_')) {
+                currentProfile = {};
+                config.profiles.push(currentProfile);
+            }
+            return;
+        }
+
+        const [key, ...valParts] = line.split('=');
+        const value = valParts.join('=').trim();
+
+        if (currentSection === 'Settings') {
+            if (key === 'activeProfileId') config.activeProfileId = value || null;
+        } else if (currentSection && currentSection.startsWith('Profile_')) {
+            if (key === 'servers') {
+                currentProfile[key] = value ? value.split(',') : [];
+            } else {
+                currentProfile[key] = value;
+            }
+        }
+    });
+    return config;
+};
+
+const getInitialConfig = () => {
+    const trendyId = "1704700000000";
+    return {
+        activeProfileId: trendyId,
+        profiles: [{
+            id: trendyId,
+            name: "Trendystream",
+            username: "c91392c3e194",
+            password: "7657840f7676",
+            servers: [
+                "http://vpn.tsclean.cc",
+                "http://line.tsclean.cc",
+                "http://line.protv.cc:8000",
+                "http://line.beetx.cc"
+            ]
+        }]
+    };
+};
 
 ipcMain.handle('get-config', async () => {
     try {
         if (fs.existsSync(CONFIG_FILE)) {
             const data = await fs.promises.readFile(CONFIG_FILE, 'utf-8');
-            return JSON.parse(data);
+            return parseINI(data);
         }
-        // Default empty config
-        return { profiles: [], activeProfileId: null };
+        // Save initial config if not found
+        const initial = getInitialConfig();
+        await fs.promises.writeFile(CONFIG_FILE, stringifyINI(initial));
+        return initial;
     } catch (e) {
         console.error("Config load error:", e);
-        return { profiles: [], activeProfileId: null };
+        return getInitialConfig();
     }
 });
 
 ipcMain.handle('save-config', async (event, config) => {
     try {
-        await fs.promises.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
+        await fs.promises.writeFile(CONFIG_FILE, stringifyINI(config));
         return { success: true };
     } catch (e) {
         console.error("Config save error:", e);

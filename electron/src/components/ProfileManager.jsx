@@ -11,7 +11,7 @@ const ProfileManager = ({ onClose, onProfileChanged }) => {
         name: '',
         username: '',
         password: '',
-        server: ''
+        servers: ['http://']
     });
 
     useEffect(() => {
@@ -40,14 +40,13 @@ const ProfileManager = ({ onClose, onProfileChanged }) => {
 
     const handleAdd = () => {
         const newId = Date.now().toString();
-        const newProfile = { id: newId, name: 'New Provider', username: '', password: '', server: 'http://' };
+        const newProfile = { id: newId, name: 'New Provider', username: '', password: '', servers: ['http://'] };
         setFormData(newProfile);
         setEditingId(newId);
-        // Don't save to list yet, wait for user to save form
     };
 
     const handleEdit = (profile) => {
-        setFormData({ ...profile });
+        setFormData({ ...profile, servers: profile.servers || ['http://'] });
         setEditingId(profile.id);
     };
 
@@ -64,21 +63,45 @@ const ProfileManager = ({ onClose, onProfileChanged }) => {
     };
 
     const handleFormSave = async () => {
+        // Clean up empty servers
+        const cleanedFormData = {
+            ...formData,
+            servers: formData.servers.filter(s => s.trim() !== "" && s !== "http://")
+        };
+        // Ensure at least one placeholder if empty? No, better to have a real one.
+        if (cleanedFormData.servers.length === 0) cleanedFormData.servers = ["http://"];
+
         let updatedProfiles;
         const existingIndex = profiles.findIndex(p => p.id === formData.id);
         
         if (existingIndex >= 0) {
             updatedProfiles = [...profiles];
-            updatedProfiles[existingIndex] = formData;
+            updatedProfiles[existingIndex] = cleanedFormData;
         } else {
-            updatedProfiles = [...profiles, formData];
+            updatedProfiles = [...profiles, cleanedFormData];
         }
 
-        // If it's the first profile, make it active automatically
-        const nextActive = activeId || formData.id;
+        const nextActive = activeId || cleanedFormData.id;
         
         await handleSaveConfig(updatedProfiles, nextActive);
         setEditingId(null);
+    };
+
+    const handleServerChange = (index, value) => {
+        const newServers = [...formData.servers];
+        newServers[index] = value;
+        setFormData({ ...formData, servers: newServers });
+    };
+
+    const addServerLine = () => {
+        setFormData({ ...formData, servers: [...formData.servers, 'http://'] });
+    };
+
+    const removeServerLine = (index) => {
+        if (formData.servers.length > 1) {
+            const newServers = formData.servers.filter((_, i) => i !== index);
+            setFormData({ ...formData, servers: newServers });
+        }
     };
 
     const handleSetActive = async (id) => {
@@ -145,13 +168,23 @@ const ProfileManager = ({ onClose, onProfileChanged }) => {
                             </div>
 
                             <div>
-                                <label style={{ display: 'block', fontSize: '0.8rem', color: '#909296', marginBottom: '4px' }}>Server URL (http://...)</label>
-                                <input 
-                                    style={{ width: '100%' }} 
-                                    value={formData.server} 
-                                    onChange={e => setFormData({...formData, server: e.target.value})}
-                                    placeholder="http://domain.com"
-                                />
+                                <label style={{ display: 'block', fontSize: '0.8rem', color: '#909296', marginBottom: '4px' }}>Server URLs</label>
+                                {formData.servers.map((srv, idx) => (
+                                    <div key={idx} style={{ display: 'flex', gap: '5px', marginBottom: '5px' }}>
+                                        <input 
+                                            style={{ flex: 1 }} 
+                                            value={srv} 
+                                            onChange={e => handleServerChange(idx, e.target.value)}
+                                            placeholder="http://domain.com"
+                                        />
+                                        <button className="btn" onClick={() => removeServerLine(idx)} style={{ padding: '4px 8px' }}>
+                                            <Trash2 size={12} />
+                                        </button>
+                                    </div>
+                                ))}
+                                <button className="btn" onClick={addServerLine} style={{ width: '100%', fontSize: '0.75rem', marginTop: '5px', padding: '2px' }}>
+                                    <Plus size={12} /> Add Server
+                                </button>
                             </div>
 
                             <div>
