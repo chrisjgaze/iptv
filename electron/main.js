@@ -303,7 +303,7 @@ ipcMain.handle('load-local-m3u', async () => {
 });
 
 // Launch VLC
-ipcMain.handle('launch-vlc', async (event, streamUrl, customVlcPath) => {
+ipcMain.handle('launch-vlc', async (event, streamUrl, customVlcPath, title) => {
   try {
     // Default paths based on OS
     let vlcPath = customVlcPath;
@@ -320,8 +320,13 @@ ipcMain.handle('launch-vlc', async (event, streamUrl, customVlcPath) => {
 
     console.log(`Launching VLC: ${vlcPath} -> ${streamUrl}`);
     
+    const args = [streamUrl];
+    if (title) {
+        args.push(`--meta-title=${title}`);
+    }
+
     // Spawn VLC detached
-    const subprocess = spawn(vlcPath, [streamUrl], {
+    const subprocess = spawn(vlcPath, args, {
       detached: true,
       stdio: 'ignore'
     });
@@ -441,4 +446,84 @@ ipcMain.handle('cache-image', async (event, url) => {
         // console.error(`Failed to cache image ${url}:`, e.message); 
         // Silent fail is fine, we just use remote
     }
+});
+
+// --- Download Manager ---
+const downloadSessions = new Map();
+const DOWNLOAD_DIR = path.join(USER_DATA_PATH, 'downloads');
+
+if (!fs.existsSync(DOWNLOAD_DIR)) {
+    fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+}
+
+ipcMain.handle('start-download', async (event, { url, filename, id }) => {
+    try {
+        console.log(`Starting download: ${filename} from ${url}`);
+        const controller = new AbortController();
+        const filePath = path.join(DOWNLOAD_DIR, `${filename.replace(/[^a-z0-9]/gi, '_')}.mp4`); // Simple sanitization
+        
+        downloadSessions.set(id, controller);
+
+        const response = await axios({
+            method: 'get',
+            url: url,
+            responseType: 'stream',
+            signal: controller.signal,
+            onDownloadProgress: (progressEvent) => {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('download-progress-update', {
+                        id,
+                        loaded: progressEvent.loaded,
+                        total: progressEvent.total,
+                        progress: progressEvent.progress,
+                        rate: progressEvent.rate, // bytes per second
+                        status: 'downloading'
+                    });
+                }
+            }
+        });
+
+        const writer = fs.createWriteStream(filePath);
+        response.data.pipe(writer);
+
+        return new Promise((resolve, reject) => {
+            writer.on('finish', () => {
+                downloadSessions.delete(id);
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('download-complete', { id, filePath });
+                }
+                resolve({ success: true, filePath });
+            });
+            writer.on('error', (err) => {
+                downloadSessions.delete(id);
+                reject({ success: false, error: err.message });
+            });
+            // Handle manual aborts via axios signal cleaning up the file
+            response.data.on('close', () => {
+                 if (controller.signal.aborted) {
+                     writer.destroy();
+                     fs.unlink(filePath, () => {}); // Delete partial file
+                 }
+            });
+        });
+
+    } catch (error) {
+        downloadSessions.delete(id);
+        if (axios.isCancel(error)) {
+            console.log('Download canceled');
+            return { success: false, status: 'canceled' };
+        }
+        console.error('Download error:', error.message);
+        return { success: false, error: error.message };
+    }
+});
+
+ipcMain.handle('cancel-download', async (event, id) => {
+    if (downloadSessions.has(id)) {
+        const controller = downloadSessions.get(id);
+        controller.abort();
+        downloadSessions.delete(id);
+        return { success: true };
+    }
+    return { success: false, error: 'Download not found' };
 });

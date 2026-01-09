@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Settings, RefreshCw, Play, Search, Copy, Download, Cast, ChevronRight, ChevronDown } from 'lucide-react';
+import { Settings, RefreshCw, Play, Search, Copy, Download, Cast, ChevronRight, ChevronDown, X } from 'lucide-react';
 import { SERVER_URLS, parseM3U, getRewrittenUrl } from './utils/m3u';
 import VideoPlayer from './components/VideoPlayer';
 import CachedImage from './components/CachedImage';
@@ -30,6 +30,10 @@ function App() {
   const [expandedSeasons, setExpandedSeasons] = useState({});
   const [tileSize, setTileSize] = useState(200);
 
+  // Download State
+  const [activeDownloads, setActiveDownloads] = useState({});
+  const [showDownloads, setShowDownloads] = useState(false);
+
   // --- Helpers ---
   const toggleGroup = (prefix) => {
       setExpandedGroups(prev => ({...prev, [prefix]: !prev[prefix]}));
@@ -52,23 +56,98 @@ function App() {
   };
 
   const handleM3UData = (rawData) => {
+      // ... (existing logic) ...
       setStatus('Parsing M3U...');
-      // Small delay to let UI render the parsing status before heavy sync operation
       setTimeout(() => {
           const data = parseM3U(rawData);
           setCategories(data.categories);
           setStreams(data.streams);
           setStatus(`Loaded ${data.streams.length} streams in ${data.categories.length} categories.`);
           
-          // Default to first category if available
           if (data.categories.length > 0 && !selectedCategory) {
              setSelectedCategory(data.categories[0]);
           }
       }, 100);
   };
 
+  // --- Download Logic ---
+  const startDownload = (stream) => {
+      const id = Date.now().toString() + Math.random().toString().slice(2, 6);
+      const url = getRewrittenUrl(stream.url, selectedServer);
+      const filename = stream.name || "download";
+
+      setActiveDownloads(prev => ({
+          ...prev,
+          [id]: {
+              id,
+              filename,
+              progress: 0,
+              speed: 0,
+              loaded: 0,
+              total: 0,
+              status: 'starting'
+          }
+      }));
+
+      // Trigger IPC
+      if (window.api && window.api.startDownload) {
+          window.api.startDownload({ url, filename, id });
+          setShowDownloads(true); // Open panel
+      }
+  };
+
+  const cancelDownload = (id) => {
+      if (window.api && window.api.cancelDownload) {
+          window.api.cancelDownload(id);
+      }
+      setActiveDownloads(prev => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+      });
+  };
+
+  useEffect(() => {
+      if (!window.api) return;
+
+      const onProgress = (data) => {
+          setActiveDownloads(prev => {
+              if (!prev[data.id]) return prev;
+              return {
+                  ...prev,
+                  [data.id]: {
+                      ...prev[data.id],
+                      progress: data.progress || 0,
+                      loaded: data.loaded || 0,
+                      total: data.total || 0,
+                      speed: data.rate || 0,
+                      status: 'downloading'
+                  }
+              };
+          });
+      };
+
+      const onComplete = (data) => {
+          // Remove from list or mark done. Let's remove for now or show 'Done'
+          setActiveDownloads(prev => {
+              const next = { ...prev };
+              delete next[data.id];
+              return next;
+          });
+          setStatus(`Download complete: ${data.filePath}`);
+      };
+
+      if (window.api.onDownloadProgressUpdate) window.api.onDownloadProgressUpdate(onProgress);
+      if (window.api.onDownloadComplete) window.api.onDownloadComplete(onComplete);
+
+      return () => {
+          // Cleanup listeners if api exposes removal (assuming it does or overwrites)
+      };
+  }, []);
+
   // --- Initial Load ---
   useEffect(() => {
+      // ... (existing load logic)
       const loadLocal = async () => {
           setStatus('Checking local cache...');
           try {
@@ -86,7 +165,6 @@ function App() {
       };
       loadLocal();
 
-      // Scan for Cast Devices
       if (window.api.castScan) {
           window.api.castScan().then(devices => {
               setCastDevices(['None', ...devices]);
@@ -99,7 +177,10 @@ function App() {
               });
           });
       }
-  }, []); // Run once on mount
+  }, []); 
+
+  // ... (rest of logic) ...
+
 
   // Watch for 'None' selection to stop casting
   useEffect(() => {
@@ -180,7 +261,7 @@ function App() {
         }
     } else {
         setStatus(`Launching VLC for: ${stream.name}`);
-        const result = await window.api.launchVLC(finalUrl);
+        const result = await window.api.launchVLC(finalUrl, null, stream.name);
         if (!result.success) {
           alert(`Failed to launch VLC: ${result.error}`);
         }
@@ -369,6 +450,26 @@ function App() {
             />
             English Only
           </label>
+
+          <button 
+            className="btn"
+            onClick={() => setShowDownloads(!showDownloads)}
+            title="Downloads"
+            style={{ display: 'flex', alignItems: 'center', gap: '5px', marginLeft: '10px', position: 'relative' }}
+          >
+            <Download size={16} />
+            {Object.keys(activeDownloads).length > 0 && (
+                <span style={{ 
+                    position: 'absolute', top: -5, right: -5, 
+                    backgroundColor: '#ff6b6b', color: 'white', 
+                    borderRadius: '50%', fontSize: '0.6rem', 
+                    width: '16px', height: '16px', 
+                    display: 'flex', alignItems: 'center', justifyContent: 'center' 
+                }}>
+                    {Object.keys(activeDownloads).length}
+                </span>
+            )}
+          </button>
         </div>
 
         <div style={{ flex: 1 }}></div>
@@ -447,6 +548,37 @@ function App() {
 
       {/* Main Content */}
       <div className="main-content">
+        {/* Download Manager Overlay */}
+        {showDownloads && (
+            <div className="downloads-modal">
+                <div className="downloads-header">
+                    <span>Active Downloads ({Object.keys(activeDownloads).length})</span>
+                    <button onClick={() => setShowDownloads(false)} style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}><X size={16} /></button>
+                </div>
+                <div className="downloads-list">
+                    {Object.values(activeDownloads).length === 0 ? (
+                        <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>No active downloads</div>
+                    ) : (
+                        Object.values(activeDownloads).map(dl => (
+                            <div key={dl.id} className="download-item">
+                                <div className="dl-row">
+                                    <div className="dl-name" title={dl.filename}>{dl.filename}</div>
+                                    <button className="dl-cancel" onClick={() => cancelDownload(dl.id)}><X size={14} /></button>
+                                </div>
+                                <div className="dl-progress-bg">
+                                    <div className="dl-progress-bar" style={{ width: `${(dl.progress * 100).toFixed(1)}%` }}></div>
+                                </div>
+                                <div className="dl-stats">
+                                    <span>{(dl.loaded / (1024*1024)).toFixed(1)} / {(dl.total / (1024*1024)).toFixed(1)} MB</span>
+                                    <span>{(dl.speed / 1024).toFixed(0)} KB/s</span>
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+        )}
+
         {/* Sidebar: Categories */}
         <div className="sidebar">
           <div className="sidebar-header">
@@ -498,6 +630,16 @@ function App() {
                         onDoubleClick={() => playStream(stream)}
                         title={stream.name}
                     >
+                        <div 
+                            className="download-btn"
+                            title="Download"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                startDownload(stream);
+                            }}
+                        >
+                            <Download size={14} />
+                        </div>
                         <CachedImage 
                             src={stream.tvg_logo} 
                             alt={stream.name} 

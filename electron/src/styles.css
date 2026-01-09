@@ -233,6 +233,7 @@ body {
   align-items: center;
   gap: 8px;
   transition: transform 0.1s;
+  position: relative; /* Context for absolute download button */
 }
 
 .stream-card:hover {
@@ -241,8 +242,9 @@ body {
 }
 
 .stream-logo {
-  width: 50px;
-  height: 50px;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
   object-fit: contain;
   background-color: #000;
   border-radius: 4px;
@@ -370,4 +372,121 @@ select, input {
   background-color: #111;
   padding: 20px;
   text-align: center;
+}
+
+/* Download Button on Card */
+.download-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 4px;
+  cursor: pointer;
+  display: none; /* Show on hover */
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+}
+
+.stream-card:hover .download-btn {
+  display: flex;
+}
+
+.download-btn:hover {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Download Manager Modal */
+.downloads-modal {
+  position: fixed;
+  top: 60px;
+  right: 20px;
+  width: 350px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  max-height: 80vh;
+}
+
+.downloads-header {
+  padding: 10px 15px;
+  background-color: #2c2e33;
+  border-bottom: 1px solid var(--border);
+  font-weight: bold;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.downloads-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.download-item {
+  background-color: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 0.85rem;
+}
+
+.dl-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.dl-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  font-weight: 500;
+}
+
+.dl-progress-bg {
+  height: 6px;
+  background-color: #333;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 4px 0;
+}
+
+.dl-progress-bar {
+  height: 100%;
+  background-color: var(--accent);
+  transition: width 0.2s;
+}
+
+.dl-stats {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.dl-cancel {
+  background: none;
+  border: none;
+  color: #ff6b6b;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.dl-cancel:hover {
+  color: #fa5252;
 }

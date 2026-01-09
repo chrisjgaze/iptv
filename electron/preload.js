@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('api', {
   fetchM3U: (url) => ipcRenderer.invoke('fetch-m3u', url),
   loadLocalM3U: () => ipcRenderer.invoke('load-local-m3u'),
-  launchVLC: (url, path) => ipcRenderer.invoke('launch-vlc', url, path),
+  launchVLC: (url, path, title) => ipcRenderer.invoke('launch-vlc', url, path, title),
   castScan: () => ipcRenderer.invoke('cast-scan'),
   castPlay: (device, url) => ipcRenderer.invoke('cast-play', device, url),
   castStop: (device) => ipcRenderer.invoke('cast-stop', device),
