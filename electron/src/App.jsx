@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Settings, RefreshCw, Play, Search, Copy, Download, Cast, ChevronRight, ChevronDown } from 'lucide-react';
-import { SERVER_URLS, getRewrittenUrl } from './utils/m3u';
+import { SERVER_URLS, parseM3U, getRewrittenUrl } from './utils/m3u';
 import VideoPlayer from './components/VideoPlayer';
 import CachedImage from './components/CachedImage';
 
@@ -50,9 +50,11 @@ function App() {
       setExpandedSeasons(prev => ({...prev, [id]: !prev[id]}));
   };
 
-  const handleM3UData = (data) => {
-      // Data is already parsed from Main Process
-      if (data && data.categories && data.streams) {
+  const handleM3UData = (rawData) => {
+      setStatus('Parsing M3U...');
+      // Small delay to let UI render the parsing status before heavy sync operation
+      setTimeout(() => {
+          const data = parseM3U(rawData);
           setCategories(data.categories);
           setStreams(data.streams);
           setStatus(`Loaded ${data.streams.length} streams in ${data.categories.length} categories.`);
@@ -61,7 +63,7 @@ function App() {
           if (data.categories.length > 0 && !selectedCategory) {
              setSelectedCategory(data.categories[0]);
           }
-      }
+      }, 100);
   };
 
   // --- Initial Load ---

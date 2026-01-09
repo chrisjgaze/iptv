@@ -9,6 +9,35 @@ const url = require('url');
 const os = require('os');
 const ChromecastAPI = require('chromecast-api');
 
+// --- CRITICAL ERROR LOGGING ---
+const LOG_FILE = path.join(__dirname, 'startup_error.log');
+
+function logToFile(msg) {
+    const timestamp = new Date().toISOString();
+    const logMsg = `[${timestamp}] ${msg}\n`;
+    try {
+        fs.appendFileSync(LOG_FILE, logMsg);
+    } catch (e) {
+        // Can't log if fs fails
+    }
+}
+
+process.on('uncaughtException', (error) => {
+    const msg = `UNCAUGHT EXCEPTION: ${error.message}\n${error.stack}`;
+    console.error(msg);
+    logToFile(msg);
+    // Keep app alive if possible, or exit gracefully
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    const msg = `UNHANDLED REJECTION: ${reason}`;
+    console.error(msg);
+    logToFile(msg);
+});
+
+logToFile("App starting...");
+
 // --- Helpers ---
 
 function getLocalIP() {
@@ -115,9 +144,21 @@ const USER_DATA_PATH = app.getPath('userData');
 const CACHE_FILE_PATH = path.join(USER_DATA_PATH, 'playlist.m3u');
 const IMAGE_CACHE_DIR = path.join(USER_DATA_PATH, 'images');
 
+console.log('--- STARTUP DEBUG ---');
+console.log('User Data Path:', USER_DATA_PATH);
+console.log('M3U Cache Path:', CACHE_FILE_PATH);
+console.log('Image Cache Dir:', IMAGE_CACHE_DIR);
+
 // Ensure image cache directory exists
-if (!fs.existsSync(IMAGE_CACHE_DIR)) {
-    fs.mkdirSync(IMAGE_CACHE_DIR, { recursive: true });
+try {
+    if (!fs.existsSync(IMAGE_CACHE_DIR)) {
+        console.log('Creating image cache directory...');
+        fs.mkdirSync(IMAGE_CACHE_DIR, { recursive: true });
+    } else {
+        console.log('Image cache directory exists.');
+    }
+} catch (err) {
+    console.error('FAILED to create/check cache dir:', err);
 }
 
 // Chromecast Manager
@@ -139,6 +180,7 @@ castClient.on('device', function (device) {
 });
 
 const createWindow = () => {
+  console.log('Creating main window...');
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
@@ -146,24 +188,37 @@ const createWindow = () => {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false // Often needed for fetching images from various sources in local players
+      webSecurity: false 
     },
   });
 
-  // In production, load the index.html. In dev, load localhost.
   const isDev = !app.isPackaged;
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5180');
+    const devUrl = 'http://localhost:5180';
+    console.log(`Loading Dev URL: ${devUrl}`);
+    mainWindow.loadURL(devUrl).catch(err => {
+        console.error(`FAILED to load URL ${devUrl}:`, err);
+    });
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
+    const indexPath = path.join(__dirname, 'dist', 'index.html');
+    console.log(`Loading Production File: ${indexPath}`);
+    mainWindow.loadFile(indexPath).catch(err => {
+        console.error(`FAILED to load file ${indexPath}:`, err);
+    });
   }
 };
 
-app.on('ready', createWindow);
+console.log('Registering app lifecycle handlers...');
+app.on('ready', () => {
+    console.log('App is READY');
+    createWindow();
+});
 
 app.on('window-all-closed', () => {
+  console.log('All windows closed.');
   if (process.platform !== 'darwin') {
+    console.log('Quitting app...');
     app.quit();
   }
 });
@@ -173,56 +228,6 @@ app.on('activate', () => {
     createWindow();
   }
 });
-
-// --- Parsing Helper ---
-const parseM3U = (content) => {
-  const lines = content.split('\n');
-  const streams = [];
-  const categories = new Set();
-  
-  let currentStream = null;
-
-  lines.forEach(line => {
-    const l = line.trim();
-    if (!l) return;
-
-    if (l.startsWith('#EXTINF:')) {
-      currentStream = { raw: l };
-      
-      // Extract Group Title
-      const groupMatch = l.match(/group-title="([^"]*)"/i);
-      const groupTitle = groupMatch ? groupMatch[1].trim() : "Uncategorized";
-      currentStream.group_title = groupTitle || "Uncategorized";
-      categories.add(currentStream.group_title);
-
-      // Extract Logo
-      const logoMatch = l.match(/tvg-logo="([^"]*)"/i);
-      if (logoMatch) {
-        currentStream.tvg_logo = logoMatch[1].trim();
-      }
-
-      // Extract Name
-      const parts = l.split(',');
-      currentStream.name = parts.length > 1 ? parts[parts.length - 1].trim() : "Unknown";
-      
-    } else if (l.startsWith('#EXTGRP:') && currentStream) {
-      const groupName = l.replace('#EXTGRP:', '').trim();
-      if (groupName) {
-         currentStream.group_title = groupName;
-         categories.add(groupName);
-      }
-    } else if (!l.startsWith('#') && currentStream) {
-      currentStream.url = l;
-      streams.push(currentStream);
-      currentStream = null;
-    }
-  });
-
-  return {
-    categories: Array.from(categories).sort(),
-    streams
-  };
-};
 
 // --- IPC Handlers ---
 
@@ -268,18 +273,14 @@ ipcMain.handle('fetch-m3u', async (event, url) => {
 
     // Save to disk on success
     try {
-        await fs.promises.writeFile(CACHE_FILE_PATH, response.data);
+        fs.writeFileSync(CACHE_FILE_PATH, response.data);
         console.log(`M3U cached to: ${CACHE_FILE_PATH}`);
     } catch (fsError) {
         console.error("Failed to cache M3U:", fsError);
+        // We don't fail the fetch just because caching failed, but good to know
     }
 
-    // Parse in Main Process
-    console.log("Parsing M3U in Main Process...");
-    const parsedData = parseM3U(response.data);
-    console.log(`Parsed ${parsedData.streams.length} streams.`);
-
-    return { success: true, data: parsedData };
+    return { success: true, data: response.data };
   } catch (error) {
     console.error('Error fetching M3U:', error.message);
     return { success: false, error: error.message };
@@ -291,13 +292,8 @@ ipcMain.handle('load-local-m3u', async () => {
     try {
         if (fs.existsSync(CACHE_FILE_PATH)) {
             console.log(`Loading M3U from cache: ${CACHE_FILE_PATH}`);
-            const data = await fs.promises.readFile(CACHE_FILE_PATH, 'utf-8');
-            
-            console.log("Parsing Cached M3U in Main Process...");
-            const parsedData = parseM3U(data);
-            console.log(`Parsed ${parsedData.streams.length} streams.`);
-            
-            return { success: true, data: parsedData };
+            const data = fs.readFileSync(CACHE_FILE_PATH, 'utf-8');
+            return { success: true, data };
         }
         return { success: false, error: 'No cache file found' };
     } catch (error) {
