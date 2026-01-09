@@ -174,6 +174,56 @@ app.on('activate', () => {
   }
 });
 
+// --- Parsing Helper ---
+const parseM3U = (content) => {
+  const lines = content.split('\n');
+  const streams = [];
+  const categories = new Set();
+  
+  let currentStream = null;
+
+  lines.forEach(line => {
+    const l = line.trim();
+    if (!l) return;
+
+    if (l.startsWith('#EXTINF:')) {
+      currentStream = { raw: l };
+      
+      // Extract Group Title
+      const groupMatch = l.match(/group-title="([^"]*)"/i);
+      const groupTitle = groupMatch ? groupMatch[1].trim() : "Uncategorized";
+      currentStream.group_title = groupTitle || "Uncategorized";
+      categories.add(currentStream.group_title);
+
+      // Extract Logo
+      const logoMatch = l.match(/tvg-logo="([^"]*)"/i);
+      if (logoMatch) {
+        currentStream.tvg_logo = logoMatch[1].trim();
+      }
+
+      // Extract Name
+      const parts = l.split(',');
+      currentStream.name = parts.length > 1 ? parts[parts.length - 1].trim() : "Unknown";
+      
+    } else if (l.startsWith('#EXTGRP:') && currentStream) {
+      const groupName = l.replace('#EXTGRP:', '').trim();
+      if (groupName) {
+         currentStream.group_title = groupName;
+         categories.add(groupName);
+      }
+    } else if (!l.startsWith('#') && currentStream) {
+      currentStream.url = l;
+      streams.push(currentStream);
+      currentStream = null;
+    }
+  });
+
+  return {
+    categories: Array.from(categories).sort(),
+    streams
+  };
+};
+
 // --- IPC Handlers ---
 
 // Fetch M3U content (Bypasses CORS) and cache it
@@ -218,14 +268,18 @@ ipcMain.handle('fetch-m3u', async (event, url) => {
 
     // Save to disk on success
     try {
-        fs.writeFileSync(CACHE_FILE_PATH, response.data);
+        await fs.promises.writeFile(CACHE_FILE_PATH, response.data);
         console.log(`M3U cached to: ${CACHE_FILE_PATH}`);
     } catch (fsError) {
         console.error("Failed to cache M3U:", fsError);
-        // We don't fail the fetch just because caching failed, but good to know
     }
 
-    return { success: true, data: response.data };
+    // Parse in Main Process
+    console.log("Parsing M3U in Main Process...");
+    const parsedData = parseM3U(response.data);
+    console.log(`Parsed ${parsedData.streams.length} streams.`);
+
+    return { success: true, data: parsedData };
   } catch (error) {
     console.error('Error fetching M3U:', error.message);
     return { success: false, error: error.message };
@@ -237,8 +291,13 @@ ipcMain.handle('load-local-m3u', async () => {
     try {
         if (fs.existsSync(CACHE_FILE_PATH)) {
             console.log(`Loading M3U from cache: ${CACHE_FILE_PATH}`);
-            const data = fs.readFileSync(CACHE_FILE_PATH, 'utf-8');
-            return { success: true, data };
+            const data = await fs.promises.readFile(CACHE_FILE_PATH, 'utf-8');
+            
+            console.log("Parsing Cached M3U in Main Process...");
+            const parsedData = parseM3U(data);
+            console.log(`Parsed ${parsedData.streams.length} streams.`);
+            
+            return { success: true, data: parsedData };
         }
         return { success: false, error: 'No cache file found' };
     } catch (error) {
