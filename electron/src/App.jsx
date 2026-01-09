@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Settings, RefreshCw, Play, Search, Copy, Download, Cast, ChevronRight, ChevronDown, X } from 'lucide-react';
-import { SERVER_URLS, parseM3U, getRewrittenUrl } from './utils/m3u';
+import { parseM3U, getRewrittenUrl } from './utils/m3u';
 import VideoPlayer from './components/VideoPlayer';
 import CachedImage from './components/CachedImage';
 import ProfileManager from './components/ProfileManager';
