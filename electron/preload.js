@@ -13,5 +13,9 @@ contextBridge.exposeInMainWorld('api', {
   onProgress: (callback) => ipcRenderer.on('download-progress', (event, data) => callback(data)),
   onDownloadLog: (callback) => ipcRenderer.on('download-log', (event, msg) => callback(msg)),
   removeProgressListeners: () => ipcRenderer.removeAllListeners('download-progress'),
+  config: {
+      load: () => ipcRenderer.invoke('get-config'),
+      save: (data) => ipcRenderer.invoke('save-config', data)
+  },
   platform: process.platform
 });

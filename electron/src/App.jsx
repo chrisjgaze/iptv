@@ -3,12 +3,11 @@ import { Settings, RefreshCw, Play, Search, Copy, Download, Cast, ChevronRight, 
 import { SERVER_URLS, parseM3U, getRewrittenUrl } from './utils/m3u';
 import VideoPlayer from './components/VideoPlayer';
 import CachedImage from './components/CachedImage';
-
-const USERNAME = "c91392c3e194";
-const PASSWORD = "7657840f7676";
+import ProfileManager from './components/ProfileManager';
 
 function App() {
-  const [selectedServer, setSelectedServer] = useState(SERVER_URLS[0]);
+  const [currentProfile, setCurrentProfile] = useState(null);
+  const [showProfiles, setShowProfiles] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [categories, setCategories] = useState([]);
   const [streams, setStreams] = useState([]);
@@ -72,8 +71,9 @@ function App() {
 
   // --- Download Logic ---
   const startDownload = (stream) => {
+      if (!currentProfile) return;
       const id = Date.now().toString() + Math.random().toString().slice(2, 6);
-      const url = getRewrittenUrl(stream.url, selectedServer);
+      const url = getRewrittenUrl(stream.url, currentProfile.server);
       const filename = stream.name || "download";
 
       setActiveDownloads(prev => ({
@@ -154,39 +154,52 @@ function App() {
 
   // --- Initial Load ---
   useEffect(() => {
-      // ... (existing load logic)
-      const loadLocal = async () => {
-          setStatus('Checking local cache...');
-          try {
-              const result = await window.api.loadLocalM3U();
-              if (result.success) {
-                  console.log("Local cache loaded");
-                  handleM3UData(result.data);
+      const init = async () => {
+          if (window.api && window.api.config) {
+              const config = await window.api.config.load();
+              if (config.activeProfileId) {
+                  const active = config.profiles.find(p => p.id === config.activeProfileId);
+                  if (active) {
+                      setCurrentProfile(active);
+                  }
               } else {
-                  setStatus('Ready (No local cache). Click Reload to fetch.');
+                  setShowProfiles(true); // Open manager if no profiles
               }
-          } catch (e) {
-              console.error("Local load error", e);
-              setStatus('Ready.');
+          }
+
+          const loadLocal = async () => {
+              setStatus('Checking local cache...');
+              try {
+                  const result = await window.api.loadLocalM3U();
+                  if (result.success) {
+                      console.log("Local cache loaded");
+                      handleM3UData(result.data);
+                  } else {
+                      setStatus('Ready. Configure profile and click Reload.');
+                  }
+              } catch (e) {
+                  console.error("Local load error", e);
+                  setStatus('Ready.');
+              }
+          };
+          loadLocal();
+
+          if (window.api.castScan) {
+              window.api.castScan().then(devices => {
+                  setCastDevices(['None', ...devices]);
+              });
+              
+              window.api.onCastDeviceFound(name => {
+                  setCastDevices(prev => {
+                      if (!prev.includes(name)) return [...prev, name];
+                      return prev;
+                  });
+              });
           }
       };
-      loadLocal();
-
-      if (window.api.castScan) {
-          window.api.castScan().then(devices => {
-              setCastDevices(['None', ...devices]);
-          });
-          
-          window.api.onCastDeviceFound(name => {
-              setCastDevices(prev => {
-                  if (!prev.includes(name)) return [...prev, name];
-                  return prev;
-              });
-          });
-      }
+      
+      init();
   }, []); 
-
-  // ... (rest of logic) ...
 
 
   // Watch for 'None' selection to stop casting
@@ -205,12 +218,18 @@ function App() {
   // --- Actions ---
 
   const fetchM3U = async () => {
+    if (!currentProfile || !currentProfile.username || !currentProfile.password || !currentProfile.server) {
+        alert("Please configure your profile first (Profiles button).");
+        setShowProfiles(true);
+        return;
+    }
+
     setIsLoading(true);
     setStatus('Connecting...');
     
     // Construct URL
-    const base = selectedServer.replace(/\/$/, "");
-    const url = `${base}/get.php?username=${USERNAME}&password=${PASSWORD}&type=m3u_plus&output=ts`;
+    const base = currentProfile.server.replace(/\/$/, "");
+    const url = `${base}/get.php?username=${currentProfile.username}&password=${currentProfile.password}&type=m3u_plus&output=ts`;
 
     // Setup progress listener
     const handleProgress = (data) => {
@@ -247,10 +266,10 @@ function App() {
   };
 
   const playStream = async (stream) => {
-    if (!stream || !stream.url) return;
+    if (!stream || !stream.url || !currentProfile) return;
     
     // Rewrite URL to use selected server
-    const finalUrl = getRewrittenUrl(stream.url, selectedServer);
+    const finalUrl = getRewrittenUrl(stream.url, currentProfile.server);
     
     if (playerMode === 'internal') {
         setCurrentStream({ ...stream, url: finalUrl });
@@ -425,20 +444,20 @@ function App() {
     <div className="container">
       {/* Header */}
       <div className="header">
-        <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>IPTV Electron</div>
+        <div style={{ fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <User size={20} /> 
+            {currentProfile ? currentProfile.name : 'No Profile'}
+        </div>
         
         <div className="controls">
-          <label>Server:</label>
-          <select 
-            value={selectedServer} 
-            onChange={(e) => setSelectedServer(e.target.value)}
-            style={{ width: '200px' }}
+          <button 
+            className="btn"
+            onClick={() => setShowProfiles(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
           >
-            {SERVER_URLS.map(url => (
-              <option key={url} value={url}>{url}</option>
-            ))}
-          </select>
-          
+            <Settings size={16} /> Profiles
+          </button>
+
           <button 
             className="btn btn-primary" 
             onClick={fetchM3U} 
@@ -555,6 +574,14 @@ function App() {
 
       {/* Main Content */}
       <div className="main-content">
+        {/* Profile Manager Overlay */}
+        {showProfiles && (
+            <ProfileManager 
+                onClose={() => setShowProfiles(false)} 
+                onProfileChanged={(p) => setCurrentProfile(p)}
+            />
+        )}
+
         {/* Download Manager Overlay */}
         {showDownloads && (
             <div className="downloads-modal">

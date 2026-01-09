@@ -448,6 +448,33 @@ ipcMain.handle('cache-image', async (event, url) => {
     }
 });
 
+// --- Config Manager ---
+const CONFIG_FILE = path.join(USER_DATA_PATH, 'config.json');
+
+ipcMain.handle('get-config', async () => {
+    try {
+        if (fs.existsSync(CONFIG_FILE)) {
+            const data = await fs.promises.readFile(CONFIG_FILE, 'utf-8');
+            return JSON.parse(data);
+        }
+        // Default empty config
+        return { profiles: [], activeProfileId: null };
+    } catch (e) {
+        console.error("Config load error:", e);
+        return { profiles: [], activeProfileId: null };
+    }
+});
+
+ipcMain.handle('save-config', async (event, config) => {
+    try {
+        await fs.promises.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
+        return { success: true };
+    } catch (e) {
+        console.error("Config save error:", e);
+        return { success: false, error: e.message };
+    }
+});
+
 // --- Download Manager ---
 const downloadSessions = new Map();
 const DOWNLOAD_DIR = path.join(USER_DATA_PATH, 'downloads');
