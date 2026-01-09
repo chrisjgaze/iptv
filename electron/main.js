@@ -194,46 +194,123 @@ castClient.on('device', function (device) {
     }
 });
 
+const readline = require('readline');
+
+// ... (existing logging and helpers) ...
+
 // --- IPC Handlers ---
 
-// Fetch & Load M3U
-ipcMain.handle('fetch-m3u', async (event, { url, profileId }) => {
-  try {
-    const paths = getProfileCachePaths(profileId);
-    const response = await axios.get(url, {
-      timeout: 300000,
-      responseType: 'text',
-      headers: { 'User-Agent': 'IPTVApp/1.0 ElectronFetcher' },
-      onDownloadProgress: (progressEvent) => {
-          if (mainWindow) {
-            mainWindow.webContents.send('download-progress', {
-              connected: true,
-              loaded: progressEvent.loaded,
-              total: progressEvent.total,
-              speed: (progressEvent.rate || 0)
-            });
-          }
-      }
+// Progressive M3U Parser
+const parseM3UProgressive = async (filePath, profileId) => {
+    if (!fs.existsSync(filePath)) return;
+
+    const fileStream = fs.createReadStream(filePath);
+    const rl = readline.createInterface({
+        input: fileStream,
+        crlfDelay: Infinity
     });
 
-    fs.writeFileSync(paths.m3u, response.data);
-    return { success: true, data: response.data };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
+    let streamsBatch = [];
+    let categories = new Set();
+    let currentStream = null;
+    let totalProcessed = 0;
+
+    for await (const line of rl) {
+        const l = line.trim();
+        if (!l) continue;
+
+        if (l.startsWith('#EXTINF:')) {
+            currentStream = { raw: l };
+            const groupMatch = l.match(/group-title="([^"]*)"/i);
+            const groupTitle = groupMatch ? groupMatch[1].trim() : "Uncategorized";
+            currentStream.group_title = groupTitle || "Uncategorized";
+            categories.add(currentStream.group_title);
+
+            const logoMatch = l.match(/tvg-logo="([^"]*)"/i);
+            if (logoMatch) currentStream.tvg_logo = logoMatch[1].trim();
+
+            const parts = l.split(',');
+            currentStream.name = parts.length > 1 ? parts[parts.length - 1].trim() : "Unknown";
+        } else if (l.startsWith('#EXTGRP:') && currentStream) {
+            const groupName = l.replace('#EXTGRP:', '').trim();
+            if (groupName) {
+                currentStream.group_title = groupName;
+                categories.add(groupName);
+            }
+        } else if (!l.startsWith('#') && currentStream) {
+            currentStream.url = l;
+            streamsBatch.push(currentStream);
+            currentStream = null;
+            totalProcessed++;
+
+            // Send in batches of 5000 to keep UI responsive but minimize IPC overhead
+            if (streamsBatch.length >= 5000) {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('m3u-batch', {
+                        profileId,
+                        streams: streamsBatch,
+                        categories: Array.from(categories),
+                        isFinal: false
+                    });
+                }
+                streamsBatch = [];
+            }
+        }
+    }
+
+    // Send final batch
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('m3u-batch', {
+            profileId,
+            streams: streamsBatch,
+            categories: Array.from(categories),
+            isFinal: true,
+            total: totalProcessed
+        });
+    }
+};
 
 ipcMain.handle('load-local-m3u', async (event, profileId) => {
     try {
         const paths = getProfileCachePaths(profileId);
         if (fs.existsSync(paths.m3u)) {
-            const data = fs.readFileSync(paths.m3u, 'utf-8');
-            return { success: true, data };
+            // Start progressive loading in background
+            parseM3UProgressive(paths.m3u, profileId);
+            return { success: true, started: true };
         }
         return { success: false, error: 'No cache file found' };
     } catch (error) {
         return { success: false, error: error.message };
     }
+});
+
+// Fetch M3U content (Bypasses CORS) and cache it
+ipcMain.handle('fetch-m3u', async (event, { url, profileId }) => {
+  try {
+    const paths = getProfileCachePaths(profileId);
+    
+    // Use axios to stream the download directly to disk
+    const response = await axios({
+        method: 'get',
+        url: url,
+        responseType: 'stream',
+        headers: { 'User-Agent': 'IPTVApp/1.0 ElectronFetcher' }
+    });
+
+    const writer = fs.createWriteStream(paths.m3u);
+    response.data.pipe(writer);
+
+    return new Promise((resolve, reject) => {
+        writer.on('finish', () => {
+            // Once written, start progressive parse from disk
+            parseM3UProgressive(paths.m3u, profileId);
+            resolve({ success: true, started: true });
+        });
+        writer.on('error', reject);
+    });
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 });
 
 // VLC Launcher

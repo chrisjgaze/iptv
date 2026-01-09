@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Settings, RefreshCw, Play, Search, Copy, Download, Cast, ChevronRight, ChevronDown, X, User } from 'lucide-react';
-import { parseM3U, getRewrittenUrl } from './utils/m3u';
+import { getRewrittenUrl } from './utils/m3u';
 import VideoPlayer from './components/VideoPlayer';
 import CachedImage from './components/CachedImage';
 import ProfileManager from './components/ProfileManager';
@@ -55,19 +55,25 @@ function App() {
       setExpandedSeasons(prev => ({...prev, [id]: !prev[id]}));
   };
 
-  const handleM3UData = (rawData) => {
-      const data = parseM3U(rawData);
-      setCategories(data.categories);
-      setStreams(data.streams);
-      
-      const msg = `Loaded ${data.streams.length} streams in ${data.categories.length} categories.`;
-      setStatus(msg);
-      
-      if (data.categories.length > 0 && !selectedCategory) {
-         setSelectedCategory(data.categories[0]);
-      }
-      return data;
-  };
+  useEffect(() => {
+      if (!window.api || !window.api.onM3UData) return;
+
+      window.api.onM3UData((batch) => {
+          if (batch.profileId !== currentProfile?.id) return;
+
+          setStreams(prev => [...prev, ...batch.streams]);
+          setCategories(prev => {
+              const next = new Set([...prev, ...batch.categories]);
+              return Array.from(next).sort();
+          });
+
+          if (batch.isFinal) {
+              setStatus(`Loaded ${batch.total} streams.`);
+          } else {
+              setStatus(`Loading... ${batch.streams.length} more streams found.`);
+          }
+      });
+  }, [currentProfile?.id]);
 
   const loadLocal = async (pId) => {
       if (!pId) return;
@@ -77,14 +83,10 @@ function App() {
       setStreams([]);
       setSelectedCategory(null);
       
-      setStatus('Checking local cache...');
+      setStatus('Background loading from cache...');
       try {
-          console.log("Loading local M3U for profile:", pId);
           const result = await window.api.loadLocalM3U(pId);
-          if (result.success) {
-              console.log("Local cache loaded");
-              handleM3UData(result.data);
-          } else {
+          if (!result.success) {
               setStatus('Ready. No local cache. Click Reload to fetch.');
           }
       } catch (e) {
@@ -276,43 +278,26 @@ function App() {
         window.api.onProgress(handleProgress);
     }
 
-    try {
-      // Use Electron IPC to fetch (bypass CORS)
-      const result = await window.api.fetchM3U({ url, profileId: currentProfile.id });
-      
-      if (result.success) {
-        handleM3UData(result.data);
-        
-        // --- Image Cleanup Logic ---
-        const parsed = parseM3U(result.data); // Quick parse to get URLs
-        const validUrls = parsed.streams.map(s => s.tvg_logo).filter(u => !!u);
-        
-        if (window.api.cleanupProfileImages) {
-            const cleanupResult = await window.api.cleanupProfileImages({ 
-                profileId: currentProfile.id, 
-                validUrls 
-            });
-            
-            if (cleanupResult.success) {
-                setStatus(`Loaded ${parsed.streams.length} streams. Cleaned up ${cleanupResult.deletedCount} unused images.`);
-            } else {
-                setStatus(`Loaded ${parsed.streams.length} streams. Image cleanup failed: ${cleanupResult.error}`);
-            }
+        try {
+          // Use Electron IPC to fetch (bypass CORS)
+          // fetchM3U in main now returns once the file is written and starts progressive parse
+          const result = await window.api.fetchM3U({ url, profileId: currentProfile.id });
+          
+          if (result.success) {
+            setStatus("Download complete. Processing list in background...");
+          } else {
+            setStatus(`Error: ${result.error}`);
+            alert(`Failed to fetch M3U: ${result.error}`);
+          }
+        } catch (e) {
+          setStatus(`Error: ${e.message}`);
+        } finally {
+          setIsLoading(false);
+          if (window.api && window.api.removeProgressListeners) {
+              window.api.removeProgressListeners();
+          }
         }
-      } else {
-        setStatus(`Error: ${result.error}`);
-        alert(`Failed to fetch M3U: ${result.error}`);
-      }
-    } catch (e) {
-      setStatus(`Error: ${e.message}`);
-    } finally {
-      setIsLoading(false);
-      if (window.api && window.api.removeProgressListeners) {
-          window.api.removeProgressListeners();
-      }
-    }
-  };
-
+      };
   const playStream = async (stream) => {
     if (!stream || !stream.url || !currentProfile || !selectedServer) return;
     
