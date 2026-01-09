@@ -56,19 +56,99 @@ function App() {
   };
 
   const handleM3UData = (rawData) => {
-      // ... (existing logic) ...
-      setStatus('Parsing M3U...');
-      setTimeout(() => {
-          const data = parseM3U(rawData);
-          setCategories(data.categories);
-          setStreams(data.streams);
-          setStatus(`Loaded ${data.streams.length} streams in ${data.categories.length} categories.`);
-          
-          if (data.categories.length > 0 && !selectedCategory) {
-             setSelectedCategory(data.categories[0]);
-          }
-      }, 100);
+      const data = parseM3U(rawData);
+      setCategories(data.categories);
+      setStreams(data.streams);
+      
+      const msg = `Loaded ${data.streams.length} streams in ${data.categories.length} categories.`;
+      setStatus(msg);
+      
+      if (data.categories.length > 0 && !selectedCategory) {
+         setSelectedCategory(data.categories[0]);
+      }
+      return data;
   };
+
+  const loadLocal = async (pId) => {
+      if (!pId) return;
+      
+      // Clear current state before loading new
+      setCategories([]);
+      setStreams([]);
+      setSelectedCategory(null);
+      
+      setStatus('Checking local cache...');
+      try {
+          console.log("Loading local M3U for profile:", pId);
+          const result = await window.api.loadLocalM3U(pId);
+          if (result.success) {
+              console.log("Local cache loaded");
+              handleM3UData(result.data);
+          } else {
+              setStatus('Ready. No local cache. Click Reload to fetch.');
+          }
+      } catch (e) {
+          console.error("Local load error", e);
+          setStatus('Ready.');
+      }
+  };
+
+  // --- Initial Load ---
+  useEffect(() => {
+      const init = async () => {
+          if (window.api && window.api.config) {
+              const config = await window.api.config.load();
+              if (config.activeProfileId) {
+                  const active = config.profiles.find(p => p.id === config.activeProfileId);
+                  if (active) {
+                      setCurrentProfile(active);
+                      if (active.servers && active.servers.length > 0) {
+                          setSelectedServer(active.servers[0]);
+                      }
+                  }
+              } else {
+                  setShowProfiles(true); // Open manager if no profiles
+              }
+          }
+
+          if (window.api.castScan) {
+              window.api.castScan().then(devices => {
+                  setCastDevices(['None', ...devices]);
+              });
+              
+              window.api.onCastDeviceFound(name => {
+                  setCastDevices(prev => {
+                      if (!prev.includes(name)) return [...prev, name];
+                      return prev;
+                  });
+              });
+          }
+      };
+      
+      init();
+  }, []); 
+
+  // Reload cache when profile ID changes
+  useEffect(() => {
+      if (currentProfile?.id) {
+          loadLocal(currentProfile.id);
+      } else {
+          // No profile, clear everything
+          setCategories([]);
+          setStreams([]);
+          setSelectedCategory(null);
+          setStatus('Ready. Configure profile.');
+      }
+  }, [currentProfile?.id]);
+
+  // Update selected server if profile changes or is edited
+  useEffect(() => {
+      if (currentProfile && currentProfile.servers) {
+          if (!currentProfile.servers.includes(selectedServer)) {
+              setSelectedServer(currentProfile.servers[0] || '');
+          }
+      }
+  }, [currentProfile, selectedServer]);
 
   // --- Download Logic ---
   const startDownload = (stream) => {
@@ -153,68 +233,6 @@ function App() {
       };
   }, []);
 
-  // --- Initial Load ---
-  useEffect(() => {
-      const init = async () => {
-          if (window.api && window.api.config) {
-              const config = await window.api.config.load();
-              if (config.activeProfileId) {
-                  const active = config.profiles.find(p => p.id === config.activeProfileId);
-                  if (active) {
-                      setCurrentProfile(active);
-                      if (active.servers && active.servers.length > 0) {
-                          setSelectedServer(active.servers[0]);
-                      }
-                  }
-              } else {
-                  setShowProfiles(true); // Open manager if no profiles
-              }
-          }
-
-          const loadLocal = async () => {
-              setStatus('Checking local cache...');
-              try {
-                  const result = await window.api.loadLocalM3U();
-                  if (result.success) {
-                      console.log("Local cache loaded");
-                      handleM3UData(result.data);
-                  } else {
-                      setStatus('Ready. Configure profile and click Reload.');
-                  }
-              } catch (e) {
-                  console.error("Local load error", e);
-                  setStatus('Ready.');
-              }
-          };
-          loadLocal();
-
-          if (window.api.castScan) {
-              window.api.castScan().then(devices => {
-                  setCastDevices(['None', ...devices]);
-              });
-              
-              window.api.onCastDeviceFound(name => {
-                  setCastDevices(prev => {
-                      if (!prev.includes(name)) return [...prev, name];
-                      return prev;
-                  });
-              });
-          }
-      };
-      
-      init();
-  }, []); 
-
-  // Update selected server if profile changes or is edited
-  useEffect(() => {
-      if (currentProfile && currentProfile.servers) {
-          if (!currentProfile.servers.includes(selectedServer)) {
-              setSelectedServer(currentProfile.servers[0] || '');
-          }
-      }
-  }, [currentProfile, selectedServer]);
-
-
   // Watch for 'None' selection to stop casting
   useEffect(() => {
       if (selectedCastDevice === 'None') {
@@ -260,10 +278,27 @@ function App() {
 
     try {
       // Use Electron IPC to fetch (bypass CORS)
-      const result = await window.api.fetchM3U(url);
+      const result = await window.api.fetchM3U({ url, profileId: currentProfile.id });
       
       if (result.success) {
         handleM3UData(result.data);
+        
+        // --- Image Cleanup Logic ---
+        const parsed = parseM3U(result.data); // Quick parse to get URLs
+        const validUrls = parsed.streams.map(s => s.tvg_logo).filter(u => !!u);
+        
+        if (window.api.cleanupProfileImages) {
+            const cleanupResult = await window.api.cleanupProfileImages({ 
+                profileId: currentProfile.id, 
+                validUrls 
+            });
+            
+            if (cleanupResult.success) {
+                setStatus(`Loaded ${parsed.streams.length} streams. Cleaned up ${cleanupResult.deletedCount} unused images.`);
+            } else {
+                setStatus(`Loaded ${parsed.streams.length} streams. Image cleanup failed: ${cleanupResult.error}`);
+            }
+        }
       } else {
         setStatus(`Error: ${result.error}`);
         alert(`Failed to fetch M3U: ${result.error}`);
@@ -451,6 +486,18 @@ function App() {
   }, [visibleCategories, selectedCategory]);
 
 
+  const handleVlcPathChange = async () => {
+      if (window.api && window.api.selectVlcPath) {
+          const newPath = await window.api.selectVlcPath();
+          if (newPath) {
+              const config = await window.api.config.load();
+              config.vlcPath = newPath;
+              await window.api.config.save(config);
+              setStatus(`VLC path updated: ${newPath}`);
+          }
+      }
+  };
+
   // --- Render ---
 
   return (
@@ -536,7 +583,7 @@ function App() {
                         checked={playerMode === 'vlc'} 
                         onChange={() => setPlayerMode('vlc')} 
                     />
-                    VLC
+                    <span onClick={handleVlcPathChange} title="Click to set VLC path">VLC</span>
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
                     <input 
@@ -703,6 +750,7 @@ function App() {
                             src={stream.tvg_logo} 
                             alt={stream.name} 
                             className="stream-logo"
+                            profileId={currentProfile?.id}
                         />
                         <div className="stream-name">{stream.displayName || stream.name}</div>
                     </div>

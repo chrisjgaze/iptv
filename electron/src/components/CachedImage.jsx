@@ -1,20 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Image as ImageIcon } from 'lucide-react';
 
-const CachedImage = ({ src, alt, className, style }) => {
+const CachedImage = ({ src, alt, className, style, profileId }) => {
   const [imageSrc, setImageSrc] = useState(null);
   const [error, setError] = useState(false);
   const isMounted = useRef(true);
 
   useEffect(() => {
     isMounted.current = true;
-    if (!src) return;
+    if (!src || !profileId) return;
 
     const load = async () => {
       try {
         // 1. Check local cache
         if (window.api && window.api.checkImageCache) {
-            const cachedPath = await window.api.checkImageCache(src);
+            const cachedPath = await window.api.checkImageCache({ src, profileId });
             if (cachedPath && isMounted.current) {
                 setImageSrc(cachedPath);
                 return;
@@ -28,7 +28,7 @@ const CachedImage = ({ src, alt, className, style }) => {
 
         // 3. Trigger background cache for next time
         if (window.api && window.api.cacheImage) {
-            window.api.cacheImage(src).catch(e => {}); // Fire and forget
+            window.api.cacheImage({ src, profileId }).catch(e => {}); // Fire and forget
         }
 
       } catch (e) {
@@ -41,7 +41,7 @@ const CachedImage = ({ src, alt, className, style }) => {
     return () => {
       isMounted.current = false;
     };
-  }, [src]);
+  }, [src, profileId]);
 
   if (error || !imageSrc) {
     // Placeholder while loading or on error
