@@ -343,6 +343,30 @@ ipcMain.handle('fetch-m3u', async (event, { url, profileId }) => {
   }
 });
 
+// XC API Proxy
+ipcMain.handle('xc-api', async (event, { server, username, password, action, extraParams = {} }) => {
+    try {
+        const base = server.replace(/\/$/, "");
+        const url = new URL(`${base}/player_api.php`);
+        url.searchParams.append('username', username);
+        url.searchParams.append('password', password);
+        url.searchParams.append('action', action);
+        
+        Object.entries(extraParams).forEach(([key, val]) => {
+            url.searchParams.append(key, val);
+        });
+
+        const response = await axios.get(url.toString(), { 
+            timeout: 20000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+        });
+        return { success: true, data: response.data };
+    } catch (error) {
+        console.error(`XC API Error (${action}):`, error.message);
+        return { success: false, error: error.message };
+    }
+});
+
 // VLC Launcher
 ipcMain.handle('launch-vlc', async (event, streamUrl, customVlcPath, title) => {
   try {
