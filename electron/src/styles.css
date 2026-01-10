@@ -400,17 +400,49 @@ select, input {
     flex-wrap: wrap;
 }
 
+.api-output-container {
+    flex: 1;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
 .api-output {
     flex: 1;
+    width: 100%;
     background-color: #1a1b1e;
     color: #c1c2c5;
     border: 1px solid #373a40;
     border-radius: 4px;
     padding: 10px;
+    padding-top: 35px; /* Space for clear button */
     font-family: monospace;
     font-size: 0.8rem;
     resize: none;
     white-space: pre;
+}
+
+.clear-output-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: #373a40;
+    border: none;
+    color: #c1c2c5;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 5;
+    transition: background 0.2s;
+}
+
+.clear-output-btn:hover {
+    background: #ff6b6b;
+    color: white;
 }
 
 .profile-trigger:hover {

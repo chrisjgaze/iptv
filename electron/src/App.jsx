@@ -34,16 +34,31 @@ function App() {
   const [activeDownloads, setActiveDownloads] = useState({});
   const [showDownloads, setShowDownloads] = useState(false);
   const [showApiTestPanel, setShowApiTestPanel] = useState(false);
-  const [apiTestOutput, setApiTestOutput] = useState('');
+  const [apiTestResults, setApiTestResults] = useState({}); // { action: text }
+  const [activeApiAction, setActiveApiAction] = useState('get_live_categories');
+  const [loadingActions, setLoadingActions] = useState({}); // { action: boolean }
   const [contextMenu, setContextMenu] = useState(null);
 
   // --- Helpers ---
   const testApi = async (action) => {
-      if (!currentProfile || !selectedServer) {
-          setApiTestOutput("Error: Select a profile and server first.");
+      setActiveApiAction(action);
+      
+      // If we already have results and it's not loading, just switch view
+      if (apiTestResults[action] && !loadingActions[action]) {
           return;
       }
-      setApiTestOutput(`Testing ${action}...`);
+
+      // If already loading, don't start again
+      if (loadingActions[action]) return;
+
+      if (!currentProfile || !selectedServer) {
+          setApiTestResults(prev => ({ ...prev, [action]: "Error: Select a profile and server first." }));
+          return;
+      }
+
+      setLoadingActions(prev => ({ ...prev, [action]: true }));
+      setApiTestResults(prev => ({ ...prev, [action]: `Fetching ${action} in background...` }));
+
       try {
           const result = await window.api.testIptvApi({
               server: selectedServer,
@@ -51,14 +66,25 @@ function App() {
               password: currentProfile.password,
               action
           });
+          
+          let output = "";
           if (result.success) {
-              setApiTestOutput(JSON.stringify(result.data, null, 2));
+              output = JSON.stringify(result.data, null, 2);
           } else {
-              setApiTestOutput(`Error: ${result.error}`);
+              output = `Error: ${result.error}`;
           }
+          
+          setApiTestResults(prev => ({ ...prev, [action]: output }));
       } catch (e) {
-          setApiTestOutput(`Exception: ${e.message}`);
+          setApiTestResults(prev => ({ ...prev, [action]: `Exception: ${e.message}` }));
+      } finally {
+          setLoadingActions(prev => ({ ...prev, [action]: false }));
       }
+  };
+
+  const clearApiOutput = (e) => {
+      if (e) e.stopPropagation();
+      setApiTestResults(prev => ({ ...prev, [activeApiAction]: '' }));
   };
   const handleContextMenu = (e, stream) => {
       e.preventDefault();
@@ -929,17 +955,30 @@ function App() {
               </div>
               <div className="api-test-body">
                   <div className="api-buttons">
-                      <button className="btn" onClick={() => testApi('get_live_categories')}>Live Categories</button>
-                      <button className="btn" onClick={() => testApi('get_live_streams')}>Live Streams</button>
-                      <button className="btn" onClick={() => testApi('get_vod_streams')}>VOD Streams</button>
-                      <button className="btn" onClick={() => testApi('get_series')}>Series</button>
+                      {['get_live_categories', 'get_live_streams', 'get_vod_streams', 'get_series'].map(action => (
+                          <button 
+                            key={action}
+                            className={`btn ${activeApiAction === action ? 'btn-primary' : ''}`} 
+                            onClick={() => testApi(action)}
+                          >
+                            {action.replace('get_', '').replace('_', ' ')}
+                            {loadingActions[action] && "..."}
+                          </button>
+                      ))}
                   </div>
-                  <textarea 
-                      className="api-output" 
-                      readOnly 
-                      value={apiTestOutput} 
-                      placeholder="API results will appear here..."
-                  />
+                  <div className="api-output-container">
+                    <textarea 
+                        className="api-output" 
+                        readOnly 
+                        value={apiTestResults[activeApiAction] || ""} 
+                        placeholder="Click a button to test or view results..."
+                    />
+                    {apiTestResults[activeApiAction] && (
+                        <button className="clear-output-btn" onClick={clearApiOutput} title="Clear Output">
+                            <X size={16} />
+                        </button>
+                    )}
+                  </div>
               </div>
           </div>
       )}
