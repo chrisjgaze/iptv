@@ -36,6 +36,27 @@ function App() {
   const [contextMenu, setContextMenu] = useState(null);
 
   // --- Helpers ---
+  const handleContextMenu = (e, stream) => {
+      e.preventDefault();
+      setContextMenu({
+          mouseX: e.clientX,
+          mouseY: e.clientY,
+          stream
+      });
+  };
+
+  const handleCloseContextMenu = () => {
+      setContextMenu(null);
+  };
+
+  const copyToClipboard = (text) => {
+      if (text) {
+          navigator.clipboard.writeText(text);
+          setStatus(`Copied to clipboard: ${text.substring(0, 50)}...`);
+      }
+      handleCloseContextMenu();
+  };
+
   const toggleGroup = (prefix) => {
       setExpandedGroups(prev => ({...prev, [prefix]: !prev[prefix]}));
   };
