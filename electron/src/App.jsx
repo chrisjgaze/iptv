@@ -907,35 +907,38 @@ function App() {
       </div>
 
       {/* Context Menu */}
-      {contextMenu && (
-          <div 
-              className="context-menu" 
-              style={{ top: contextMenu.mouseY, left: contextMenu.mouseX }}
-              onClick={e => e.stopPropagation()}
-          >
-              <div className="context-menu-item" onClick={() => copyToClipboard(contextMenu.stream.url)}>
-                  <Copy size={14} />
-                  <span>Copy Stream URL</span>
-              </div>
-              {contextMenu.stream.tvg_logo && (
-                  <div className="context-menu-item" onClick={() => copyToClipboard(contextMenu.stream.tvg_logo)}>
+      {contextMenu && (() => {
+          const finalStreamUrl = getRewrittenUrl(contextMenu.stream.url, selectedServer);
+          return (
+              <div 
+                  className="context-menu" 
+                  style={{ top: contextMenu.mouseY, left: contextMenu.mouseX }}
+                  onClick={e => e.stopPropagation()}
+              >
+                  <div className="context-menu-item" onClick={() => copyToClipboard(finalStreamUrl)}>
                       <Copy size={14} />
-                      <span>Copy Logo URL</span>
+                      <span>Copy Stream URL</span>
                   </div>
-              )}
-              <div className="context-menu-separator" />
-              <div className="context-menu-info">
-                  <strong>Stream URL:</strong>
-                  <div className="url-text">{contextMenu.stream.url}</div>
+                  {contextMenu.stream.tvg_logo && (
+                      <div className="context-menu-item" onClick={() => copyToClipboard(contextMenu.stream.tvg_logo)}>
+                          <Copy size={14} />
+                          <span>Copy Logo URL</span>
+                      </div>
+                  )}
+                  <div className="context-menu-separator" />
+                  <div className="context-menu-info">
+                      <strong>Stream URL:</strong>
+                      <div className="url-text">{finalStreamUrl}</div>
+                  </div>
+                  {contextMenu.stream.tvg_logo && (
+                      <div className="context-menu-info" style={{ marginTop: '8px' }}>
+                          <strong>Logo URL:</strong>
+                          <div className="url-text">{contextMenu.stream.tvg_logo}</div>
+                      </div>
+                  )}
               </div>
-              {contextMenu.stream.tvg_logo && (
-                  <div className="context-menu-info" style={{ marginTop: '8px' }}>
-                      <strong>Logo URL:</strong>
-                      <div className="url-text">{contextMenu.stream.tvg_logo}</div>
-                  </div>
-              )}
-          </div>
-      )}
+          );
+      })()}
     </div>
   );
 }
