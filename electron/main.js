@@ -343,19 +343,6 @@ ipcMain.handle('fetch-m3u', async (event, { url, profileId }) => {
   }
 });
 
-ipcMain.handle('test-iptv-api', async (event, { server, username, password, action }) => {
-    try {
-        const base = server.replace(/\/$/, "");
-        const url = `${base}/player_api.php?username=${username}&password=${password}&action=${action}`;
-        console.log(`Testing API: ${url}`);
-        
-        const response = await axios.get(url, { timeout: 15000 });
-        return { success: true, data: response.data };
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
-});
-
 // VLC Launcher
 ipcMain.handle('launch-vlc', async (event, streamUrl, customVlcPath, title) => {
   try {

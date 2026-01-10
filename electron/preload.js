@@ -8,7 +8,6 @@ contextBridge.exposeInMainWorld('api', {
   castScan: () => ipcRenderer.invoke('cast-scan'),
   castPlay: (device, url) => ipcRenderer.invoke('cast-play', device, url),
   castStop: (device) => ipcRenderer.invoke('cast-stop', device),
-  testIptvApi: (data) => ipcRenderer.invoke('test-iptv-api', data),
   checkImageCache: (data) => ipcRenderer.invoke('check-image-cache', data),
   cacheImage: (data) => ipcRenderer.invoke('cache-image', data),
   cleanupProfileImages: (data) => ipcRenderer.invoke('cleanup-profile-images', data),

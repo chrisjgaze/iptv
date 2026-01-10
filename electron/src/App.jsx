@@ -33,80 +33,9 @@ function App() {
   // Download State
   const [activeDownloads, setActiveDownloads] = useState({});
   const [showDownloads, setShowDownloads] = useState(false);
-  const [showApiTestPanel, setShowApiTestPanel] = useState(false);
-  const [apiTestResults, setApiTestResults] = useState({}); // { action: text }
-  const [activeApiAction, setActiveApiAction] = useState('get_live_categories');
-  const [loadingActions, setLoadingActions] = useState({}); // { action: boolean }
   const [contextMenu, setContextMenu] = useState(null);
 
   // --- Helpers ---
-  const testApi = async (action) => {
-      setActiveApiAction(action);
-      
-      // If we already have results and it's not loading, just switch view
-      if (apiTestResults[action] && !loadingActions[action]) {
-          return;
-      }
-
-      // If already loading, don't start again
-      if (loadingActions[action]) return;
-
-      if (!currentProfile || !selectedServer) {
-          setApiTestResults(prev => ({ ...prev, [action]: "Error: Select a profile and server first." }));
-          return;
-      }
-
-      setLoadingActions(prev => ({ ...prev, [action]: true }));
-      setApiTestResults(prev => ({ ...prev, [action]: `Fetching ${action} in background...` }));
-
-      try {
-          const result = await window.api.testIptvApi({
-              server: selectedServer,
-              username: currentProfile.username,
-              password: currentProfile.password,
-              action
-          });
-          
-          let output = "";
-          if (result.success) {
-              output = JSON.stringify(result.data, null, 2);
-          } else {
-              output = `Error: ${result.error}`;
-          }
-          
-          setApiTestResults(prev => ({ ...prev, [action]: output }));
-      } catch (e) {
-          setApiTestResults(prev => ({ ...prev, [action]: `Exception: ${e.message}` }));
-      } finally {
-          setLoadingActions(prev => ({ ...prev, [action]: false }));
-      }
-  };
-
-  const clearApiOutput = (e) => {
-      if (e) e.stopPropagation();
-      setApiTestResults(prev => ({ ...prev, [activeApiAction]: '' }));
-  };
-  const handleContextMenu = (e, stream) => {
-      e.preventDefault();
-      setContextMenu({
-          mouseX: e.clientX,
-          mouseY: e.clientY,
-          stream
-      });
-  };
-
-  const handleCloseContextMenu = () => {
-      setContextMenu(null);
-  };
-
-  const copyToClipboard = (text) => {
-      if (text) {
-          navigator.clipboard.writeText(text);
-          setStatus(`Copied to clipboard: ${text.substring(0, 50)}...`);
-      }
-      handleCloseContextMenu();
-  };
-
   const toggleGroup = (prefix) => {
       setExpandedGroups(prev => ({...prev, [prefix]: !prev[prefix]}));
   };
@@ -561,12 +490,8 @@ function App() {
     <div className="container" onClick={handleCloseContextMenu}>
       {/* Header */}
       <div className="header">
-        <div 
-            style={{ fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
-            onClick={() => setShowApiTestPanel(!showApiTestPanel)}
-            className="profile-trigger"
-        >
-            <User size={20} color={showApiTestPanel ? "#00d4ff" : "currentColor"} /> 
+        <div style={{ fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <User size={20} /> 
             {currentProfile ? currentProfile.name : 'No Profile'}
         </div>
         
@@ -945,43 +870,6 @@ function App() {
           </div>
         </div>
       </div>
-
-      {/* API Test Panel Overlay */}
-      {showApiTestPanel && (
-          <div className="api-test-panel">
-              <div className="api-test-header">
-                  <span>API Diagnostic Tools</span>
-                  <button onClick={() => setShowApiTestPanel(false)} className="close-btn"><X size={16} /></button>
-              </div>
-              <div className="api-test-body">
-                  <div className="api-buttons">
-                      {['get_live_categories', 'get_live_streams', 'get_vod_streams', 'get_series'].map(action => (
-                          <button 
-                            key={action}
-                            className={`btn ${activeApiAction === action ? 'btn-primary' : ''}`} 
-                            onClick={() => testApi(action)}
-                          >
-                            {action.replace('get_', '').replace('_', ' ')}
-                            {loadingActions[action] && "..."}
-                          </button>
-                      ))}
-                  </div>
-                  <div className="api-output-container">
-                    <textarea 
-                        className="api-output" 
-                        readOnly 
-                        value={apiTestResults[activeApiAction] || ""} 
-                        placeholder="Click a button to test or view results..."
-                    />
-                    {apiTestResults[activeApiAction] && (
-                        <button className="clear-output-btn" onClick={clearApiOutput} title="Clear Output">
-                            <X size={16} />
-                        </button>
-                    )}
-                  </div>
-              </div>
-          </div>
-      )}
 
       {/* Internal Player Overlay */}
       {currentStream && (
