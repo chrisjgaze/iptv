@@ -224,7 +224,7 @@ body {
 
 .stream-card {
   background-color: var(--bg-secondary);
-  border: 1px solid var(--border);
+  border: 1.5px solid #00d4ff; /* Neon Blue */
   border-radius: 6px;
   padding: 10px;
   cursor: pointer;
@@ -232,13 +232,15 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  transition: transform 0.1s;
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
   position: relative; /* Context for absolute download button */
+  box-shadow: 0 0 5px rgba(0, 212, 255, 0.2);
 }
 
 .stream-card:hover {
-  transform: translateY(-2px);
-  border-color: var(--accent);
+  transform: translateY(-4px);
+  border-color: #00f2ff;
+  box-shadow: 0 0 15px rgba(0, 212, 255, 0.6), inset 0 0 5px rgba(0, 212, 255, 0.2);
 }
 
 .stream-logo {
