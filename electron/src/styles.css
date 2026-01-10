@@ -359,6 +359,64 @@ select, input {
     font-family: monospace;
 }
 
+/* API Test Panel */
+.api-test-panel {
+    position: fixed;
+    top: 60px;
+    left: 20px;
+    width: 500px;
+    height: 400px;
+    background-color: #25262b;
+    border: 1.5px solid #00d4ff;
+    border-radius: 8px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+}
+
+.api-test-header {
+    padding: 10px 15px;
+    background-color: #1a1b1e;
+    border-bottom: 1px solid #373a40;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: bold;
+    color: #00d4ff;
+}
+
+.api-test-body {
+    padding: 15px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.api-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.api-output {
+    flex: 1;
+    background-color: #1a1b1e;
+    color: #c1c2c5;
+    border: 1px solid #373a40;
+    border-radius: 4px;
+    padding: 10px;
+    font-family: monospace;
+    font-size: 0.8rem;
+    resize: none;
+    white-space: pre;
+}
+
+.profile-trigger:hover {
+    opacity: 0.8;
+}
+
 /* Video Player Overlay */
 .video-overlay {
   position: fixed;

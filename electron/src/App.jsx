@@ -33,9 +33,33 @@ function App() {
   // Download State
   const [activeDownloads, setActiveDownloads] = useState({});
   const [showDownloads, setShowDownloads] = useState(false);
+  const [showApiTestPanel, setShowApiTestPanel] = useState(false);
+  const [apiTestOutput, setApiTestOutput] = useState('');
   const [contextMenu, setContextMenu] = useState(null);
 
   // --- Helpers ---
+  const testApi = async (action) => {
+      if (!currentProfile || !selectedServer) {
+          setApiTestOutput("Error: Select a profile and server first.");
+          return;
+      }
+      setApiTestOutput(`Testing ${action}...`);
+      try {
+          const result = await window.api.testIptvApi({
+              server: selectedServer,
+              username: currentProfile.username,
+              password: currentProfile.password,
+              action
+          });
+          if (result.success) {
+              setApiTestOutput(JSON.stringify(result.data, null, 2));
+          } else {
+              setApiTestOutput(`Error: ${result.error}`);
+          }
+      } catch (e) {
+          setApiTestOutput(`Exception: ${e.message}`);
+      }
+  };
   const handleContextMenu = (e, stream) => {
       e.preventDefault();
       setContextMenu({
@@ -511,8 +535,12 @@ function App() {
     <div className="container" onClick={handleCloseContextMenu}>
       {/* Header */}
       <div className="header">
-        <div style={{ fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <User size={20} /> 
+        <div 
+            style={{ fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
+            onClick={() => setShowApiTestPanel(!showApiTestPanel)}
+            className="profile-trigger"
+        >
+            <User size={20} color={showApiTestPanel ? "#00d4ff" : "currentColor"} /> 
             {currentProfile ? currentProfile.name : 'No Profile'}
         </div>
         
@@ -891,6 +919,30 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* API Test Panel Overlay */}
+      {showApiTestPanel && (
+          <div className="api-test-panel">
+              <div className="api-test-header">
+                  <span>API Diagnostic Tools</span>
+                  <button onClick={() => setShowApiTestPanel(false)} className="close-btn"><X size={16} /></button>
+              </div>
+              <div className="api-test-body">
+                  <div className="api-buttons">
+                      <button className="btn" onClick={() => testApi('get_live_categories')}>Live Categories</button>
+                      <button className="btn" onClick={() => testApi('get_live_streams')}>Live Streams</button>
+                      <button className="btn" onClick={() => testApi('get_vod_streams')}>VOD Streams</button>
+                      <button className="btn" onClick={() => testApi('get_series')}>Series</button>
+                  </div>
+                  <textarea 
+                      className="api-output" 
+                      readOnly 
+                      value={apiTestOutput} 
+                      placeholder="API results will appear here..."
+                  />
+              </div>
+          </div>
+      )}
 
       {/* Internal Player Overlay */}
       {currentStream && (
