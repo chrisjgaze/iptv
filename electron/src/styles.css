@@ -300,11 +300,61 @@ select, input {
 }
 
 .status-bar {
-  padding: 4px 10px;
-  background-color: var(--bg-secondary);
-  border-top: 1px solid var(--border);
+  padding: 5px 15px;
+  background-color: #1a1b1e;
+  border-top: 1px solid #373a40;
+  color: #909296;
   font-size: 0.8rem;
-  color: var(--text-secondary);
+}
+
+/* Context Menu */
+.context-menu {
+    position: fixed;
+    z-index: 9999;
+    background-color: #25262b;
+    border: 1px solid #373a40;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    padding: 5px 0;
+    min-width: 200px;
+    max-width: 400px;
+}
+
+.context-menu-item {
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background 0.2s;
+}
+
+.context-menu-item:hover {
+    background-color: #3b3d42;
+}
+
+.context-menu-separator {
+    height: 1px;
+    background-color: #373a40;
+    margin: 5px 0;
+}
+
+.context-menu-info {
+    padding: 8px 12px;
+    font-size: 0.75rem;
+    color: #909296;
+}
+
+.url-text {
+    word-break: break-all;
+    background-color: #1a1b1e;
+    padding: 4px;
+    border-radius: 3px;
+    margin-top: 4px;
+    max-height: 100px;
+    overflow-y: auto;
+    font-family: monospace;
 }
 
 /* Video Player Overlay */

@@ -4,11 +4,33 @@ import { Image as ImageIcon } from 'lucide-react';
 const CachedImage = ({ src, alt, className, style, profileId }) => {
   const [imageSrc, setImageSrc] = useState(null);
   const [error, setError] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
   const isMounted = useRef(true);
+  const observerRef = useRef(null);
+  const containerRef = useRef(null);
 
   useEffect(() => {
     isMounted.current = true;
-    if (!src || !profileId) return;
+    
+    observerRef.current = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+            setIsVisible(true);
+            if (observerRef.current) observerRef.current.disconnect();
+        }
+    }, { rootMargin: '200px' }); // Load when within 200px of viewport
+
+    if (containerRef.current) {
+        observerRef.current.observe(containerRef.current);
+    }
+
+    return () => {
+      isMounted.current = false;
+      if (observerRef.current) observerRef.current.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!src || !profileId || !isVisible) return;
 
     const load = async () => {
       try {
@@ -37,16 +59,16 @@ const CachedImage = ({ src, alt, className, style, profileId }) => {
     };
 
     load();
+  }, [src, profileId, isVisible]);
 
-    return () => {
-      isMounted.current = false;
-    };
-  }, [src, profileId]);
-
-  if (error || !imageSrc) {
-    // Placeholder while loading or on error
+  if (error || !imageSrc || !isVisible) {
+    // Placeholder while loading, off-screen, or on error
     return (
-        <div className={className} style={{...style, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#111'}}>
+        <div 
+            ref={containerRef}
+            className={className} 
+            style={{...style, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#111'}}
+        >
             <ImageIcon size={20} color="#333" />
         </div>
     );
@@ -54,6 +76,7 @@ const CachedImage = ({ src, alt, className, style, profileId }) => {
 
   return (
     <img 
+        ref={containerRef}
         src={imageSrc} 
         alt={alt} 
         className={className} 

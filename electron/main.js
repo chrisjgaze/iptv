@@ -127,15 +127,9 @@ app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors');
 
 // --- Cache & Profile Logic ---
 const USER_DATA_PATH = app.getPath('userData');
-const LEGACY_CACHE_FILE = path.join(USER_DATA_PATH, 'playlist.m3u');
-const LEGACY_IMAGE_DIR = path.join(USER_DATA_PATH, 'images');
 const TRENDY_ID = "1704700000000";
 
 const getProfileCachePaths = (profileId) => {
-    if (profileId === TRENDY_ID) {
-        return { m3u: LEGACY_CACHE_FILE, images: LEGACY_IMAGE_DIR };
-    }
-    
     const profileDir = path.join(USER_DATA_PATH, 'profiles', profileId);
     if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
     
@@ -145,7 +139,43 @@ const getProfileCachePaths = (profileId) => {
     return { m3u: path.join(profileDir, 'playlist.m3u'), images: imageDir };
 };
 
-if (!fs.existsSync(LEGACY_IMAGE_DIR)) fs.mkdirSync(LEGACY_IMAGE_DIR, { recursive: true });
+// Migration logic: Move legacy files to the unified profile structure
+const migrateLegacyFiles = () => {
+    const legacyM3U = path.join(USER_DATA_PATH, 'playlist.m3u');
+    const legacyImageDir = path.join(USER_DATA_PATH, 'images');
+    const targetPaths = getProfileCachePaths(TRENDY_ID);
+
+    try {
+        // Migrate M3U
+        if (fs.existsSync(legacyM3U) && !fs.existsSync(targetPaths.m3u)) {
+            console.log("Migrating legacy M3U file...");
+            fs.renameSync(legacyM3U, targetPaths.m3u);
+        }
+
+        // Migrate Images
+        if (fs.existsSync(legacyImageDir)) {
+            const files = fs.readdirSync(legacyImageDir);
+            if (files.length > 0) {
+                console.log(`Migrating ${files.length} legacy images...`);
+                files.forEach(file => {
+                    const oldPath = path.join(legacyImageDir, file);
+                    const newPath = path.join(targetPaths.images, file);
+                    if (!fs.existsSync(newPath)) {
+                        fs.renameSync(oldPath, newPath);
+                    } else {
+                        fs.unlinkSync(oldPath); // Clean up if already exists in target
+                    }
+                });
+            }
+            // Only remove if empty to be safe, or just leave the empty dir
+            try { fs.rmdirSync(legacyImageDir); } catch(e) {}
+        }
+    } catch (err) {
+        console.error("Migration failed:", err);
+    }
+};
+
+migrateLegacyFiles();
 
 // --- Window Management ---
 let mainWindow;
@@ -495,7 +525,47 @@ ipcMain.handle('cancel-download', async (event, id) => {
     return { success: false };
 });
 
-// Image Caching
+// Image Caching with Concurrency Queue
+const imageQueue = [];
+let activeDownloads = 0;
+const MAX_CONCURRENT_DOWNLOADS = 5;
+
+const processImageQueue = async () => {
+    if (activeDownloads >= MAX_CONCURRENT_DOWNLOADS || imageQueue.length === 0) return;
+
+    activeDownloads++;
+    const { url, profileId, resolve } = imageQueue.shift();
+
+    try {
+        const paths = getProfileCachePaths(profileId);
+        const filePath = path.join(paths.images, crypto.createHash('md5').update(url).digest('hex'));
+        
+        if (!fs.existsSync(filePath)) {
+            const res = await axios({ 
+                url, 
+                method: 'GET', 
+                responseType: 'stream', 
+                timeout: 10000,
+                headers: { 'User-Agent': 'Mozilla/5.0' }
+            });
+            
+            const writer = fs.createWriteStream(filePath);
+            res.data.pipe(writer);
+            await new Promise((resW, rejW) => {
+                writer.on('finish', resW);
+                writer.on('error', rejW);
+            });
+        }
+        resolve(true);
+    } catch (e) {
+        console.error(`Failed to cache image: ${url}`, e.message);
+        resolve(false);
+    } finally {
+        activeDownloads--;
+        processImageQueue(); // Pick up next task
+    }
+};
+
 ipcMain.handle('check-image-cache', async (event, { url, profileId }) => {
     if (!url || !profileId) return null;
     const paths = getProfileCachePaths(profileId);
@@ -505,13 +575,16 @@ ipcMain.handle('check-image-cache', async (event, { url, profileId }) => {
 
 ipcMain.handle('cache-image', async (event, { url, profileId }) => {
     if (!url || !profileId) return;
+    
+    // Check if already cached first to avoid unnecessary queuing
     const paths = getProfileCachePaths(profileId);
     const filePath = path.join(paths.images, crypto.createHash('md5').update(url).digest('hex'));
     if (fs.existsSync(filePath)) return;
-    try {
-        const res = await axios({ url, method: 'GET', responseType: 'stream', timeout: 10000 });
-        res.data.pipe(fs.createWriteStream(filePath));
-    } catch (e) {}
+
+    return new Promise((resolve) => {
+        imageQueue.push({ url, profileId, resolve });
+        processImageQueue();
+    });
 });
 
 ipcMain.handle('cleanup-profile-images', async (event, { profileId, validUrls }) => {

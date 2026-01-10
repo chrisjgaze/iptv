@@ -33,8 +33,30 @@ function App() {
   // Download State
   const [activeDownloads, setActiveDownloads] = useState({});
   const [showDownloads, setShowDownloads] = useState(false);
+  const [contextMenu, setContextMenu] = useState(null);
 
   // --- Helpers ---
+  const handleContextMenu = (e, stream) => {
+      e.preventDefault();
+      setContextMenu({
+          mouseX: e.clientX,
+          mouseY: e.clientY,
+          stream
+      });
+  };
+
+  const handleCloseContextMenu = () => {
+      setContextMenu(null);
+  };
+
+  const copyToClipboard = (text) => {
+      if (text) {
+          navigator.clipboard.writeText(text);
+          setStatus(`Copied to clipboard: ${text.substring(0, 50)}...`);
+      }
+      handleCloseContextMenu();
+  };
+
   const toggleGroup = (prefix) => {
       setExpandedGroups(prev => ({...prev, [prefix]: !prev[prefix]}));
   };
@@ -486,7 +508,7 @@ function App() {
   // --- Render ---
 
   return (
-    <div className="container">
+    <div className="container" onClick={handleCloseContextMenu}>
       {/* Header */}
       <div className="header">
         <div style={{ fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -719,6 +741,7 @@ function App() {
                         key={`${keyPrefix}-${idx}`} 
                         className="stream-card"
                         onDoubleClick={() => playStream(stream)}
+                        onContextMenu={(e) => handleContextMenu(e, stream)}
                         title={stream.name}
                     >
                         <div 
@@ -882,6 +905,37 @@ function App() {
       <div className="status-bar">
         {status}
       </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+          <div 
+              className="context-menu" 
+              style={{ top: contextMenu.mouseY, left: contextMenu.mouseX }}
+              onClick={e => e.stopPropagation()}
+          >
+              <div className="context-menu-item" onClick={() => copyToClipboard(contextMenu.stream.url)}>
+                  <Copy size={14} />
+                  <span>Copy Stream URL</span>
+              </div>
+              {contextMenu.stream.tvg_logo && (
+                  <div className="context-menu-item" onClick={() => copyToClipboard(contextMenu.stream.tvg_logo)}>
+                      <Copy size={14} />
+                      <span>Copy Logo URL</span>
+                  </div>
+              )}
+              <div className="context-menu-separator" />
+              <div className="context-menu-info">
+                  <strong>Stream URL:</strong>
+                  <div className="url-text">{contextMenu.stream.url}</div>
+              </div>
+              {contextMenu.stream.tvg_logo && (
+                  <div className="context-menu-info" style={{ marginTop: '8px' }}>
+                      <strong>Logo URL:</strong>
+                      <div className="url-text">{contextMenu.stream.tvg_logo}</div>
+                  </div>
+              )}
+          </div>
+      )}
     </div>
   );
 }
