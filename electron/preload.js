@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('api', {
   castStop: (device) => ipcRenderer.invoke('cast-stop', device),
   xcApi: (data) => ipcRenderer.invoke('xc-api', data),
   checkImageCache: (data) => ipcRenderer.invoke('check-image-cache', data),
+  checkImageCacheBatch: (data) => ipcRenderer.invoke('check-image-cache-batch', data),
   cacheImage: (data) => ipcRenderer.invoke('cache-image', data),
   cleanupProfileImages: (data) => ipcRenderer.invoke('cleanup-profile-images', data),
   onCastDeviceFound: (callback) => ipcRenderer.on('cast-device-found', (event, name) => callback(name)),
@@ -21,5 +22,9 @@ contextBridge.exposeInMainWorld('api', {
       load: () => ipcRenderer.invoke('get-config'),
       save: (data) => ipcRenderer.invoke('save-config', data)
   },
-  platform: process.platform
+  platform: process.platform,
+  startDownload: (data) => ipcRenderer.invoke('start-download', data),
+  cancelDownload: (data) => ipcRenderer.invoke('cancel-download', data),
+  onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (event, data) => callback(data)),
+  removeDownloadProgressListeners: () => ipcRenderer.removeAllListeners('download-progress')
 });

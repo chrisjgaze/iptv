@@ -124,6 +124,7 @@ if (require('electron-squirrel-startup')) {
 
 app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
 app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors');
+app.commandLine.appendSwitch('disable-autofill');
 
 // --- Cache & Profile Logic ---
 const USER_DATA_PATH = app.getPath('userData');
@@ -132,11 +133,15 @@ const TRENDY_ID = "1704700000000";
 const getProfileCachePaths = (profileId) => {
     const profileDir = path.join(USER_DATA_PATH, 'profiles', profileId);
     if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
-    
+
     const imageDir = path.join(profileDir, 'images');
     if (!fs.existsSync(imageDir)) fs.mkdirSync(imageDir, { recursive: true });
 
-    return { m3u: path.join(profileDir, 'playlist.m3u'), images: imageDir };
+    return {
+        profile: profileDir,
+        m3u: path.join(profileDir, 'playlist.m3u'),
+        images: imageDir
+    };
 };
 
 // Migration logic: Move legacy files to the unified profile structure
@@ -219,6 +224,7 @@ let activeCastDeviceName = null;
 castClient.on('device', function (device) {
     const name = device.friendlyName || device.name;
     if (!castDevices[name]) {
+        console.log(`[Chromecast] Found device: ${name} at ${device.host}`);
         castDevices[name] = device;
         if (mainWindow) mainWindow.webContents.send('cast-device-found', name);
     }
@@ -343,8 +349,31 @@ ipcMain.handle('fetch-m3u', async (event, { url, profileId }) => {
   }
 });
 
-// XC API Proxy
-ipcMain.handle('xc-api', async (event, { server, username, password, action, extraParams = {} }) => {
+// XC API Proxy with 60s Caching
+const apiCache = new Map();
+const CACHE_TTL = 86400000; // 24 hours (24 * 60 * 60 * 1000)
+
+ipcMain.handle('xc-api', async (event, { server, username, password, action, extraParams = {}, bypassCache = false }) => {
+    // Create a unique key based on the request parameters
+    const cacheKey = JSON.stringify({ server, username, action, extraParams });
+    const now = Date.now();
+
+    if (bypassCache) console.log(`[Cache] Manual bypass for ${action}`);
+
+    // Check cache
+    if (!bypassCache && apiCache.has(cacheKey)) {
+        const entry = apiCache.get(cacheKey);
+        const age = now - entry.timestamp;
+        if (age < CACHE_TTL) {
+            console.log(`[Cache] HIT: ${action} (Age: ${(age/1000).toFixed(1)}s)`);
+            return { success: true, data: entry.data, fromCache: true };
+        } else {
+            console.log(`[Cache] EXPIRED: ${action} (Age: ${(age/1000).toFixed(1)}s)`);
+        }
+    } else if (!bypassCache) {
+        console.log(`[Cache] MISS: ${action}`);
+    }
+
     try {
         const base = server.replace(/\/$/, "");
         const url = new URL(`${base}/player_api.php`);
@@ -360,14 +389,20 @@ ipcMain.handle('xc-api', async (event, { server, username, password, action, ext
             timeout: 20000,
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
         });
-        return { success: true, data: response.data };
+
+        // Store in cache
+        apiCache.set(cacheKey, { data: response.data, timestamp: now });
+
+        return { success: true, data: response.data, fromCache: false };
     } catch (error) {
         console.error(`XC API Error (${action}):`, error.message);
         return { success: false, error: error.message };
     }
 });
 
-// VLC Launcher
+// VLC Launcher (reuses same window)
+let vlcProcess = null;
+
 ipcMain.handle('launch-vlc', async (event, streamUrl, customVlcPath, title) => {
   try {
     let vlcPath = customVlcPath;
@@ -377,17 +412,32 @@ ipcMain.handle('launch-vlc', async (event, streamUrl, customVlcPath, title) => {
             vlcPath = config.vlcPath;
         }
     }
-    
+
     if (!vlcPath) {
-        vlcPath = process.platform === 'win32' ? 'C:\\\\Program Files\\\\VideoLAN\\\\VLC\\\\vlc.exe' : (process.platform === 'darwin' ? '/Applications/VLC.app/Contents/MacOS/VLC' : 'vlc');
+        vlcPath = process.platform === 'win32' ? 'C:\\Program Files\\VideoLAN\\VLC\\vlc.exe' : (process.platform === 'darwin' ? '/Applications/VLC.app/Contents/MacOS/VLC' : 'vlc');
+    }
+
+    // Close existing VLC process if running
+    if (vlcProcess && !vlcProcess.killed) {
+        console.log(`Closing existing VLC process to reuse window...`);
+        vlcProcess.kill();
+        vlcProcess = null;
+        // Wait a bit for VLC to close
+        await new Promise(resolve => setTimeout(resolve, 500));
     }
 
     console.log(`Launching VLC: ${vlcPath} -> ${streamUrl}`);
-    
-    const args = [streamUrl];
+
+    const args = [streamUrl, '--one-instance', '--playlist-enqueue'];
     if (title) args.push(`--meta-title=${title}`);
-    const subprocess = spawn(vlcPath, args, { detached: true, stdio: 'ignore' });
-    subprocess.unref();
+    vlcProcess = spawn(vlcPath, args, { stdio: 'ignore' });
+
+    // Clean up reference when VLC closes
+    vlcProcess.on('exit', () => {
+        console.log(`VLC process exited`);
+        vlcProcess = null;
+    });
+
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
@@ -402,7 +452,7 @@ const stringifyINI = (config) => {
     output += "activeProfileId=" + (config.activeProfileId || "") + "\n";
     output += "vlcPath=" + (config.vlcPath || "") + "\n\n";
     (config.profiles || []).forEach(p => {
-        output += `[Profile_${p.id}]\nid=${p.id}\nname=${p.name}\nusername=${p.username}\npassword=${p.password}\nservers=${(p.servers || []).join(',')}\n\n`;
+        output += `[Profile_${p.id}]\nid=${p.id}\nname=${p.name}\nusername=${p.username}\npassword=${p.password}\nservers=${(p.servers || []).join(',')}\nfavorites=${(p.favorites || []).join(',')}\n\n`;
     });
     return output;
 };
@@ -433,8 +483,11 @@ const parseINI = (data) => {
             if (key === 'activeProfileId') config.activeProfileId = value || null;
             if (key === 'vlcPath') config.vlcPath = value || null;
         } else if (currentProfile) {
-            if (key === 'servers') currentProfile[key] = value ? value.split(',') : [];
-            else currentProfile[key] = value;
+            if (key === 'servers' || key === 'favorites') {
+                currentProfile[key] = value ? value.split(',') : [];
+            } else {
+                currentProfile[key] = value;
+            }
         }
     });
     return config;
@@ -472,92 +525,17 @@ ipcMain.handle('save-config', async (event, config) => {
     }
 });
 
-// Download Manager
-const downloadItems = new Map();
-const DOWNLOAD_DIR = path.join(USER_DATA_PATH, 'downloads');
-if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
-
-ipcMain.handle('start-download', async (event, { url, filename, id }) => {
-    return new Promise((resolve) => {
-        const log = (msg) => { 
-            console.log(`[DL ${id}] ${msg}`);
-            if (mainWindow) mainWindow.webContents.send('download-log', `[${filename}] ${msg}`); 
-        };
-
-        log(`Initiating native download: ${url}`);
-        
-        const filePath = path.join(DOWNLOAD_DIR, `${filename.replace(/[^a-z0-9]/gi, '_')}.mp4`);
-        
-        mainWindow.webContents.downloadURL(url);
-
-        const onDownloadStarted = (event, item, webContents) => {
-            if (item.getURL() !== url) return; // Not our item
-            
-            // Clean up listener for next download
-            mainWindow.webContents.session.removeListener('will-download', onDownloadStarted);
-            
-            downloadItems.set(id, item);
-            item.setSavePath(filePath);
-
-            log(`Download started. Saving to: ${filePath}`);
-
-            item.on('updated', (event, state) => {
-                if (state === 'interrupted') {
-                    log('Download interrupted but can be resumed.');
-                } else if (state === 'progressing') {
-                    if (mainWindow && !mainWindow.isDestroyed()) {
-                        const total = item.getTotalBytes();
-                        const loaded = item.getReceivedBytes();
-                        const progress = total > 0 ? loaded / total : 0;
-                        
-                        mainWindow.webContents.send('download-progress-update', { 
-                            id, 
-                            loaded, 
-                            total, 
-                            progress, 
-                            rate: 0, // Native API doesn't give rate directly easily
-                            status: 'downloading' 
-                        });
-                    }
-                }
-            });
-
-            item.once('done', (event, state) => {
-                downloadItems.delete(id);
-                if (state === 'completed') {
-                    log('Download completed successfully.');
-                    if (mainWindow) mainWindow.webContents.send('download-complete', { id, filePath });
-                    resolve({ success: true, filePath });
-                } else {
-                    log(`Download failed: ${state}`);
-                    resolve({ success: false, error: state });
-                }
-            });
-        };
-
-        mainWindow.webContents.session.on('will-download', onDownloadStarted);
-    });
-});
-
-ipcMain.handle('cancel-download', async (event, id) => {
-    if (downloadItems.has(id)) {
-        const item = downloadItems.get(id);
-        item.cancel();
-        downloadItems.delete(id);
-        return { success: true };
-    }
-    return { success: false };
-});
+// Old download handler removed - see improved implementation below (line ~730)
 
 // Image Caching with Concurrency Queue
 const imageQueue = [];
-let activeDownloads = 0;
+let activeImageDownloads = 0;
 const MAX_CONCURRENT_DOWNLOADS = 5;
 
 const processImageQueue = async () => {
-    if (activeDownloads >= MAX_CONCURRENT_DOWNLOADS || imageQueue.length === 0) return;
+    if (activeImageDownloads >= MAX_CONCURRENT_DOWNLOADS || imageQueue.length === 0) return;
 
-    activeDownloads++;
+    activeImageDownloads++;
     const { url, profileId, resolve } = imageQueue.shift();
 
     try {
@@ -585,7 +563,7 @@ const processImageQueue = async () => {
         console.error(`Failed to cache image: ${url}`, e.message);
         resolve(false);
     } finally {
-        activeDownloads--;
+        activeImageDownloads--;
         processImageQueue(); // Pick up next task
     }
 };
@@ -595,6 +573,23 @@ ipcMain.handle('check-image-cache', async (event, { url, profileId }) => {
     const paths = getProfileCachePaths(profileId);
     const filePath = path.join(paths.images, crypto.createHash('md5').update(url).digest('hex'));
     return fs.existsSync(filePath) ? `file://${filePath}` : null;
+});
+
+ipcMain.handle('check-image-cache-batch', async (event, { urls, profileId }) => {
+    if (!urls || !profileId) return {};
+    const paths = getProfileCachePaths(profileId);
+    const results = {};
+    
+    urls.forEach(url => {
+        if (!url) return;
+        const filename = crypto.createHash('md5').update(url).digest('hex');
+        const filePath = path.join(paths.images, filename);
+        if (fs.existsSync(filePath)) {
+            results[url] = `file://${filePath}`;
+        }
+    });
+    
+    return results;
 });
 
 ipcMain.handle('cache-image', async (event, { url, profileId }) => {
@@ -644,17 +639,559 @@ ipcMain.handle('cleanup-profile-images', async (event, { profileId, validUrls })
 });
 
 // Chromecast Handlers
-ipcMain.handle('cast-scan', async () => { castClient.update(); return Object.keys(castDevices); });
+ipcMain.handle('cast-scan', async () => { 
+    console.log("[Chromecast] Starting network scan...");
+    castClient.update(); 
+    return Object.keys(castDevices); 
+});
 ipcMain.handle('cast-play', async (event, deviceName, streamUrl) => {
     const device = castDevices[deviceName];
-    if (!device) return { success: false, error: 'Device not found' };
+    if (!device) {
+        console.error(`[Cast] Playback failed: Device "${deviceName}" not found in cache.`);
+        return { success: false, error: 'Device not found' };
+    }
     activeCastDeviceName = deviceName;
     const proxyUrl = `http://${getLocalIP()}:${PROXY_PORT}/stream?url=${encodeURIComponent(streamUrl)}`;
-    return new Promise((resolve) => { device.play(proxyUrl, (err) => resolve(err ? { success: false, error: err.message } : { success: true })); });
+    
+    console.log(`[Cast] Sending stream to ${deviceName}...`);
+    console.log(`[Cast] Original URL: ${streamUrl}`);
+    console.log(`[Cast] Proxy URL: ${proxyUrl}`);
+
+    return new Promise((resolve) => { 
+        device.play(proxyUrl, (err) => {
+            if (err) {
+                console.error(`[Cast] Playback Error on ${deviceName}:`, err.message);
+                resolve({ success: false, error: err.message });
+            } else {
+                console.log(`[Cast] Playback started successfully on ${deviceName}`);
+                resolve({ success: true });
+            }
+        }); 
+    });
 });
 ipcMain.handle('cast-stop', async (event, deviceName) => {
     const name = deviceName || activeCastDeviceName;
     const device = castDevices[name];
     if (!device) return { success: false };
     return new Promise((resolve) => { device.stop(() => { if (name === activeCastDeviceName) activeCastDeviceName = null; resolve({ success: true }); }); });
+});
+
+// Download management with Queue (only 1 active download at a time)
+const activeDownloads = {};
+const downloadQueue = [];
+let currentDownload = null;
+
+const finishTask = (id) => {
+    if (currentDownload && currentDownload.id === id) {
+        console.log(`[Queue] Task ${id} finished (natural or error). Clearing currentDownload.`);
+        currentDownload = null;
+        // Schedule next check on next tick to avoid deep recursion
+        setImmediate(() => processDownloadQueue());
+    } else {
+        console.log(`[Queue] finishTask called for ${id}, but currentDownload is ${currentDownload ? currentDownload.id : 'null'}. Skipping.`);
+    }
+};
+
+const processDownloadQueue = async () => {
+    console.log(`[Queue] processDownloadQueue called. Current: ${currentDownload ? currentDownload.id : 'none'}, Queue size: ${downloadQueue.length}`);
+
+    if (currentDownload) {
+        return;
+    }
+
+    if (downloadQueue.length === 0) {
+        console.log(`[Queue] Queue is empty.`);
+        return;
+    }
+
+    const downloadTask = downloadQueue.shift();
+    currentDownload = downloadTask;
+    const { id, url, name, profileId } = downloadTask;
+
+    console.log(`\n========== DOWNLOAD START: ${name} (${id}) ==========`);
+
+    try {
+        // Get event from mainWindow
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            throw new Error('Main window not available');
+        }
+        const event = { sender: mainWindow.webContents };
+
+        // Initialize tracking early
+        activeDownloads[id] = { cancelled: false };
+
+        // Validate profileId
+        if (!profileId) {
+            throw new Error('Profile ID is missing');
+        }
+
+        const paths = getProfileCachePaths(profileId);
+        const downloadsDir = path.join(paths.profile, 'downloads');
+
+        if (!fs.existsSync(downloadsDir)) {
+            fs.mkdirSync(downloadsDir, { recursive: true });
+        }
+
+        // Sanitize filename
+        const sanitizedName = name.replace(/[^a-z0-9\s\-_.()]/gi, '_');
+        const ext = url.includes('.m3u8') ? '.mp4' : path.extname(url) || '.mp4';
+        const filePath = path.join(downloadsDir, `${sanitizedName}${ext}`);
+
+        // Send initial progress
+        event.sender.send('download-progress', {
+            id,
+            progress: 0,
+            speed: '0 KB/s',
+            status: 'downloading'
+        });
+
+        const strategies = [];
+        if (url.includes('.m3u8')) {
+            strategies.push({ name: 'HLS (ffmpeg)', fn: () => downloadHLS(event, id, url, filePath) });
+            strategies.push({ name: 'Stream Recording', fn: () => downloadStream(event, id, url, filePath) });
+        } else if (url.includes('/live/')) {
+            strategies.push({ name: 'Stream Recording', fn: () => downloadStream(event, id, url, filePath) });
+            strategies.push({ name: 'Direct Download', fn: () => downloadDirect(event, id, url, filePath) });
+        } else {
+            strategies.push({ name: 'Direct Download', fn: () => downloadDirect(event, id, url, filePath) });
+            strategies.push({ name: 'Stream Recording', fn: () => downloadStream(event, id, url, filePath) });
+        }
+        strategies.push({ name: 'Electron Native', fn: () => downloadElectron(event, id, url, filePath) });
+
+        let success = false;
+        let lastError = null;
+
+        for (let i = 0; i < strategies.length; i++) {
+            const strategy = strategies[i];
+            
+            if (activeDownloads[id]?.cancelled) {
+                console.log(`[Download ${id}] Cancelled before strategy ${strategy.name}`);
+                throw new Error('Download cancelled');
+            }
+
+            console.log(`[Download ${id}] Trying Strategy: ${strategy.name}`);
+            try {
+                await strategy.fn();
+                success = true;
+                console.log(`[Download ${id}] ✓ ${strategy.name} Success`);
+                break;
+            } catch (err) {
+                lastError = err;
+                console.log(`[Download ${id}] ✗ ${strategy.name} Failed: ${err.message}`);
+                if (err.message === 'Download cancelled' || activeDownloads[id]?.cancelled) {
+                    throw new Error('Download cancelled');
+                }
+            }
+        }
+
+        if (!success) {
+            throw lastError || new Error('All download strategies failed');
+        }
+
+        console.log(`========== DOWNLOAD COMPLETE: ${id} ==========`);
+
+    } catch (error) {
+        console.error(`========== DOWNLOAD ERROR: ${id} ==========`, error.message);
+        const isCancel = error.message === 'Download cancelled' || activeDownloads[id]?.cancelled;
+        
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('download-progress', {
+                id,
+                progress: 0,
+                speed: '0 KB/s',
+                status: isCancel ? 'cancelled' : 'error',
+                error: isCancel ? null : error.message
+            });
+        }
+    } finally {
+        delete activeDownloads[id];
+        finishTask(id);
+    }
+};
+
+ipcMain.handle('start-download', async (event, { id, url, name, profileId }) => {
+    // Add to queue
+    downloadQueue.push({ id, url, name, profileId });
+    console.log(`[Queue] ➕ Added "${name}" (${id}) to queue. Total in queue: ${downloadQueue.length}. Current active: ${currentDownload ? currentDownload.id : 'none'}`);
+
+    // Trigger queue processing
+    processDownloadQueue();
+
+    return { success: true, queued: true };
+});
+
+// Strategy 1: Direct download
+async function downloadDirect(event, id, url, filePath) {
+    return new Promise(async (resolve, reject) => {
+        console.log(`[Download ${id}] Direct download: Initiating axios GET request...`);
+        try {
+            const response = await axios({
+                method: 'GET',
+                url: url,
+                responseType: 'stream',
+                timeout: 30000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                },
+                onDownloadProgress: (progressEvent) => {
+                    if (activeDownloads[id]?.cancelled) {
+                        response.data.destroy();
+                        reject(new Error('Download cancelled'));
+                        return;
+                    }
+
+                    const total = progressEvent.total;
+                    const current = progressEvent.loaded;
+                    const progress = total ? (current / total) * 100 : 0;
+
+                    // Calculate speed
+                    const now = Date.now();
+                    const elapsed = (now - (activeDownloads[id]?.lastTime || now)) / 1000;
+                    const bytes = current - (activeDownloads[id]?.lastLoaded || 0);
+                    const speed = elapsed > 0 ? bytes / elapsed : 0;
+
+                    activeDownloads[id] = {
+                        ...activeDownloads[id],
+                        lastTime: now,
+                        lastLoaded: current
+                    };
+
+                    const speedText = formatSpeed(speed);
+
+                    event.sender.send('download-progress', {
+                        id,
+                        progress,
+                        speed: speedText,
+                        status: 'downloading'
+                    });
+                }
+            });
+
+            console.log(`[Download ${id}] Direct download: Response received, status ${response.status}`);
+            console.log(`[Download ${id}] Direct download: Creating write stream and piping data...`);
+
+            const writer = fs.createWriteStream(filePath);
+            response.data.pipe(writer);
+
+            writer.on('finish', () => {
+                console.log(`[Download ${id}] Direct download: Write stream finished`);
+                delete activeDownloads[id];
+                event.sender.send('download-progress', {
+                    id,
+                    progress: 100,
+                    speed: '0 KB/s',
+                    status: 'completed'
+                });
+                resolve();
+            });
+
+            writer.on('error', (error) => {
+                console.error(`[Download ${id}] Direct download: Write stream error:`, error.message);
+                delete activeDownloads[id];
+                reject(error);
+            });
+
+        } catch (error) {
+            console.error(`[Download ${id}] Direct download: Axios error:`, error.message);
+            if (error.response) {
+                console.error(`[Download ${id}] Direct download: HTTP status ${error.response.status}`);
+            }
+            delete activeDownloads[id];
+            reject(error);
+        }
+    });
+}
+
+// Strategy 2: HLS download using ffmpeg
+async function downloadHLS(event, id, url, filePath) {
+    return new Promise((resolve, reject) => {
+        const ffmpegPath = 'ffmpeg'; // Assumes ffmpeg is in PATH
+
+        const args = [
+            '-i', url,
+            '-c', 'copy',
+            '-bsf:a', 'aac_adtstoasc',
+            '-y',
+            filePath
+        ];
+
+        console.log(`[Download] ffmpeg command: ${ffmpegPath} ${args.join(' ')}`);
+
+        const ffmpeg = spawn(ffmpegPath, args);
+        if (activeDownloads[id]) activeDownloads[id].process = ffmpeg;
+
+        let duration = 0;
+        let progress = 0;
+
+        ffmpeg.stderr.on('data', (data) => {
+            const output = data.toString();
+
+            // Parse duration
+            const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
+            if (durationMatch) {
+                duration = parseInt(durationMatch[1]) * 3600 + parseInt(durationMatch[2]) * 60 + parseInt(durationMatch[3]);
+            }
+
+            // Parse progress
+            const timeMatch = output.match(/time=(\d{2}):(\d{2}):(\d{2})/);
+            if (timeMatch && duration > 0) {
+                const currentTime = parseInt(timeMatch[1]) * 3600 + parseInt(timeMatch[2]) * 60 + parseInt(timeMatch[3]);
+                progress = (currentTime / duration) * 100;
+
+                event.sender.send('download-progress', {
+                    id,
+                    progress: Math.min(progress, 99),
+                    speed: 'Processing...',
+                    status: 'downloading'
+                });
+            }
+        });
+
+        ffmpeg.on('close', (code) => {
+            delete activeDownloads[id];
+            if (code === 0) {
+                event.sender.send('download-progress', {
+                    id,
+                    progress: 100,
+                    speed: '0 KB/s',
+                    status: 'completed'
+                });
+                resolve();
+            } else {
+                reject(new Error(`ffmpeg exited with code ${code}`));
+            }
+        });
+
+        ffmpeg.on('error', (error) => {
+            delete activeDownloads[id];
+            reject(error);
+        });
+    });
+}
+
+// Strategy 3: Stream recording
+async function downloadStream(event, id, url, filePath) {
+    return new Promise((resolve, reject) => {
+        const startTime = Date.now();
+        let bytesDownloaded = 0;
+
+        const request = http.get(url, (response) => {
+            if (response.statusCode !== 200) {
+                reject(new Error(`HTTP ${response.statusCode}`));
+                return;
+            }
+
+            const writer = fs.createWriteStream(filePath);
+            response.pipe(writer);
+
+            response.on('data', (chunk) => {
+                if (activeDownloads[id]?.cancelled) {
+                    response.destroy();
+                    writer.close();
+                    reject(new Error('Download cancelled'));
+                    return;
+                }
+
+                bytesDownloaded += chunk.length;
+                const elapsed = (Date.now() - startTime) / 1000;
+                const speed = bytesDownloaded / elapsed;
+
+                event.sender.send('download-progress', {
+                    id,
+                    progress: 50, // Unknown total for streams
+                    speed: formatSpeed(speed),
+                    status: 'downloading'
+                });
+            });
+
+            writer.on('finish', () => {
+                delete activeDownloads[id];
+                event.sender.send('download-progress', {
+                    id,
+                    progress: 100,
+                    speed: '0 KB/s',
+                    status: 'completed'
+                });
+                resolve();
+            });
+
+            writer.on('error', (error) => {
+                delete activeDownloads[id];
+                reject(error);
+            });
+        });
+
+        request.on('error', (error) => {
+            delete activeDownloads[id];
+            reject(error);
+        });
+
+        if (activeDownloads[id]) activeDownloads[id].request = request;
+    });
+}
+
+function formatSpeed(bytesPerSecond) {
+    if (bytesPerSecond < 1024) return `${bytesPerSecond.toFixed(0)} B/s`;
+    if (bytesPerSecond < 1024 * 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
+    return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`;
+}
+
+// Strategy 4: Electron Native Download (final fallback)
+async function downloadElectron(event, id, url, filePath) {
+    return new Promise((resolve, reject) => {
+        console.log(`[Download ${id}] Using Electron native download API`);
+
+        if (!mainWindow) {
+            reject(new Error('Main window not available'));
+            return;
+        }
+
+        if (activeDownloads[id]?.cancelled) {
+            reject(new Error('Download cancelled'));
+            return;
+        }
+
+        mainWindow.webContents.downloadURL(url);
+
+        const onDownloadStarted = (downloadEvent, item, webContents) => {
+            const itemUrl = item.getURL();
+            console.log(`[Download ${id}] Download item received for URL: ${itemUrl.substring(0, 60)}...`);
+
+            if (itemUrl !== url) {
+                console.log(`[Download ${id}] URL mismatch, ignoring this download item`);
+                return; // Not our download
+            }
+
+            // Clean up listener
+            mainWindow.webContents.session.removeListener('will-download', onDownloadStarted);
+
+            item.setSavePath(filePath);
+            console.log(`[Download ${id}] Native download started, saving to: ${filePath}`);
+
+            if (activeDownloads[id]) activeDownloads[id].item = item;
+
+            item.on('updated', (updateEvent, state) => {
+                if (activeDownloads[id]?.cancelled) {
+                    item.cancel();
+                    return;
+                }
+                if (state === 'interrupted') {
+                    console.log(`[Download ${id}] Interrupted but may be resumable`);
+                } else if (state === 'progressing') {
+                    if (item.isPaused()) {
+                        console.log(`[Download ${id}] Paused`);
+                    } else {
+                        const total = item.getTotalBytes();
+                        const received = item.getReceivedBytes();
+                        const progress = total > 0 ? (received / total) * 100 : 0;
+
+                        event.sender.send('download-progress', {
+                            id,
+                            progress: Math.min(progress, 99),
+                            speed: 'Downloading...',
+                            status: 'downloading'
+                        });
+                    }
+                }
+            });
+
+            item.once('done', (doneEvent, state) => {
+                delete activeDownloads[id];
+
+                if (state === 'completed') {
+                    console.log(`[Download ${id}] Native download completed successfully`);
+                    event.sender.send('download-progress', {
+                        id,
+                        progress: 100,
+                        speed: '0 KB/s',
+                        status: 'completed'
+                    });
+                    resolve();
+                } else {
+                    console.error(`[Download ${id}] Native download failed with state: ${state}`);
+                    reject(new Error(`Download ${state}`));
+                }
+            });
+        };
+
+        mainWindow.webContents.session.on('will-download', onDownloadStarted);
+
+        // Set timeout in case download never triggers
+        const timeout = setTimeout(() => {
+            mainWindow.webContents.session.removeListener('will-download', onDownloadStarted);
+            reject(new Error('Download timeout - no download started within 30 seconds'));
+        }, 30000);
+
+        // Clear timeout if download starts
+        const originalListener = onDownloadStarted;
+        const wrappedListener = (...args) => {
+            clearTimeout(timeout);
+            originalListener(...args);
+        };
+        mainWindow.webContents.session.on('will-download', wrappedListener);
+    });
+}
+
+ipcMain.handle('cancel-download', async (event, { id }) => {
+    console.log(`\n[Cancel] ⛔ Request to cancel: ${id}`);
+
+    // Check if it's the currently downloading item
+    if (currentDownload && currentDownload.id === id) {
+        console.log(`[Cancel] ⛔ This is the ACTIVE download. Queue size before cancel: ${downloadQueue.length}`);
+
+        // Mark as cancelled in activeDownloads - this will be detected by the download strategy
+        if (activeDownloads[id]) {
+            activeDownloads[id].cancelled = true;
+
+            // Kill processes immediately
+            if (activeDownloads[id].process) {
+                activeDownloads[id].process.kill();
+                console.log(`[Cancel] ✓ Killed ffmpeg process`);
+            }
+            if (activeDownloads[id].request) {
+                activeDownloads[id].request.destroy();
+                console.log(`[Cancel] ✓ Destroyed HTTP request`);
+            }
+            if (activeDownloads[id].item) {
+                activeDownloads[id].item.cancel();
+                console.log(`[Cancel] ✓ Cancelled Electron download`);
+            }
+        }
+
+        // Send cancelled status immediately
+        event.sender.send('download-progress', {
+            id,
+            progress: 0,
+            speed: '0 KB/s',
+            status: 'cancelled'
+        });
+
+        // Force stop by clearing current download and starting next if cleanup is slow
+        setTimeout(() => {
+            if (currentDownload && currentDownload.id === id) {
+                console.log(`[Cancel] ⚡ Forcing stop of ${id} (cleanup was slow).`);
+                delete activeDownloads[id];
+                finishTask(id);
+            }
+        }, 1000); // 1s safety margin for cleanup
+    } else {
+        // Remove from queue if it's waiting
+        const queueIndex = downloadQueue.findIndex(item => item.id === id);
+        if (queueIndex !== -1) {
+            const removedItem = downloadQueue.splice(queueIndex, 1)[0];
+            console.log(`[Queue] ➖ Removed "${removedItem.name}" from queue. Queue size: ${downloadQueue.length + 1} → ${downloadQueue.length}`);
+
+            // Send cancelled status
+            event.sender.send('download-progress', {
+                id,
+                progress: 0,
+                speed: '0 KB/s',
+                status: 'cancelled'
+            });
+        } else {
+            console.log(`[Queue] ⚠️  Could not find ${id} in queue (size: ${downloadQueue.length}). Current active: ${currentDownload ? currentDownload.id : 'none'}`);
+        }
+    }
+
+    return { success: true };
 });
