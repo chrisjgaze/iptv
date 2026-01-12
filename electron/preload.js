@@ -13,7 +13,15 @@ contextBridge.exposeInMainWorld('api', {
   checkImageCacheBatch: (data) => ipcRenderer.invoke('check-image-cache-batch', data),
   cacheImage: (data) => ipcRenderer.invoke('cache-image', data),
   cleanupProfileImages: (data) => ipcRenderer.invoke('cleanup-profile-images', data),
-  onCastDeviceFound: (callback) => ipcRenderer.on('cast-device-found', (event, name) => callback(name)),
+  onCastDeviceFound: (callback) => {
+    console.log('[preload] onCastDeviceFound registered');
+    const handler = (event, name) => {
+      console.log('[preload] cast-device-found received:', name);
+      callback(name);
+    };
+    ipcRenderer.on('cast-device-found', handler);
+    return () => ipcRenderer.removeListener('cast-device-found', handler);
+  },
   onM3UData: (callback) => ipcRenderer.on('m3u-batch', (event, data) => callback(data)),
   onProgress: (callback) => ipcRenderer.on('download-progress', (event, data) => callback(data)),
   onDownloadLog: (callback) => ipcRenderer.on('download-log', (event, msg) => callback(msg)),
